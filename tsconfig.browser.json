@@ -1,0 +1,14 @@
+{
+  "//": "The browser code only: the panel client, <admin-panel> and the browser suite. They speak DOM and the library targets Node, so adding DOM to the main project would let a stray `document` in src/ pass a type-check and fail at run time. Run with `tsc -p tsconfig.browser.json`.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "rootDir": ".",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["src/client/**/*", "src/element/**/*", "src/react.ts", "src/vue.ts", "tests/browser/**/*"],
+  "exclude": ["dist", "node_modules"]
+}

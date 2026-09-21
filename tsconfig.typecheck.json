@@ -1,0 +1,12 @@
+{
+  "//": "Type-checking config (npm run typecheck): covers src AND tests, examples, scripts and the demo. The build tsconfig.json stays src-only so no test declarations are emitted to dist.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "tests/**/*", "examples/**/*", "scripts/**/*", "demo/**/*"],
+  // `tests/browser` drives a real page through Playwright and its `page.evaluate` bodies speak
+  // DOM, as do the client and the element. tsconfig.browser.json checks all three.
+  "exclude": ["dist", "node_modules", "tests/browser", "src/client", "src/element", "src/react.ts", "src/vue.ts"]
+}

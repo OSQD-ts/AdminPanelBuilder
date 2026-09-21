@@ -1,0 +1,21 @@
+node_modules
+dist
+coverage
+nginx
+.git
+.gitignore
+*.log
+.DS_Store
+npm-debug.log*
+Dockerfile
+.dockerignore
+docker-compose.yml
+README.md
+data
+# Not COPYed into any stage — excluded so they stay out of the build context too.
+tests
+scripts
+# Except the one script the build runs: it bundles the dashboard client.
+!scripts/build-client.mjs
+examples
+.github

@@ -1,0 +1,142 @@
+{
+  "name": "@osqd/admin-panel-builder",
+  "version": "0.1.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "Admin panels for Node applications, declared next to the variables they show: viewable() and modifiable() values, grouped, charted and themed, served on a path, on a port of their own, or embedded as HTML.",
+  "keywords": [
+    "admin-panel",
+    "dashboard",
+    "operator",
+    "runtime-config",
+    "feature-flags",
+    "metrics",
+    "typescript"
+  ],
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "Michał Płatosz <platosz.michal@gmail.com>",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./adapters": {
+      "types": "./dist/adapters/index.d.ts",
+      "import": "./dist/adapters/index.js",
+      "require": "./dist/adapters/index.cjs"
+    },
+    "./themes": {
+      "types": "./dist/themes/index.d.ts",
+      "import": "./dist/themes/index.js",
+      "require": "./dist/themes/index.cjs"
+    },
+    "./presets": {
+      "types": "./dist/presets/index.d.ts",
+      "import": "./dist/presets/index.js",
+      "require": "./dist/presets/index.cjs"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js",
+      "require": "./dist/cli.cjs"
+    },
+    "./client": {
+      "types": "./dist/sdk.d.ts",
+      "import": "./dist/sdk.js",
+      "require": "./dist/sdk.cjs"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "import": "./dist/config/index.js",
+      "require": "./dist/config/index.cjs"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "require": "./dist/testing.cjs"
+    },
+    "./element": {
+      "types": "./dist/element/index.d.ts",
+      "import": "./dist/element.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./vue": {
+      "types": "./dist/vue.d.ts",
+      "import": "./dist/vue.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "directories": {
+    "example": "examples",
+    "test": "tests"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "admin-panel.toml",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup && tsc --emitDeclarationOnly && tsc -p tsconfig.element.json",
+    "build:watch": "tsup --watch",
+    "client:build": "node scripts/build-client.mjs",
+    "client:check": "node scripts/build-client.mjs --check",
+    "typecheck": "tsc -p tsconfig.typecheck.json && tsc -p tsconfig.browser.json",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "docs:check": "node scripts/check-links.mjs",
+    "check": "npm run typecheck && npm run lint && npm test && npm run docs:check",
+    "check:package": "npm run build && tsx scripts/check-package.ts",
+    "demo": "tsx demo/server.ts",
+    "simulate": "tsx scripts/simulate.ts",
+    "example": "tsx examples/basic.ts",
+    "prebuild": "npm run client:build",
+    "pretest": "npm run client:build",
+    "pretypecheck": "npm run client:build",
+    "pretest:browser": "npm run client:build",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build",
+    "bench": "tsx --expose-gc scripts/bench.ts",
+    "bench:guard": "tsx --expose-gc scripts/bench-guard.ts",
+    "apb": "tsx src/apb.ts",
+    "playground": "tsx demo/playground.ts",
+    "release:next": "node scripts/next-version.mjs --explain",
+    "shared:check": "node scripts/check-shared.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.11",
+    "@types/node": "^26.3.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "axe-core": "^4.13.0",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.63.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "apb": "bin/apb.mjs"
+  }
+}

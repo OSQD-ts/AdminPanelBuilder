@@ -1,0 +1,67 @@
+# admin-panel.toml: the listener's settings, for panel.listen(listenOptions(await loadConfig())).
+#
+# Every value below is the built-in default, so deleting this file changes nothing. Change a line
+# to change what the process does; tests/config.test.ts holds this file to the defaults.
+#
+# Precedence: built-in defaults < this file < the environment. The environment variables are
+# PORT, HOST, BASE_PATH and PANEL_TOKEN; APB_CONFIG names a file other than ./admin-panel.toml.
+# Secrets belong in the environment, not in a file baked into an image.
+
+[listen]
+# The port the panel answers on. 0 asks the system for a free one.
+port = 9780
+# The address it listens on. Anything other than a loopback address needs auth, because it lets
+# other machines read the application's state.
+host = "127.0.0.1"
+# The path the panel answers under. Pages already open keep using the old path, so changing it
+# needs a restart.
+base_path = "/"
+# Host header values accepted, as "name" or "name:port". A loopback listener accepts its own
+# loopback names regardless, which is the defence against DNS rebinding.
+allowed_hosts = []
+
+[auth]
+# "none", or "token" for a bearer token. Setting PANEL_TOKEN switches this to "token".
+mode = "none"
+# The token. Leave it empty here and set PANEL_TOKEN; printed configurations show only whether it is set.
+token = ""
+
+[controls]
+# Whether operators may change modifiable values: true, false, or a list of group names.
+# Anything but false needs auth, even on loopback.
+edit = false
+# Whether operators may run actions: true, false, or a list of group names. Needs auth too.
+actions = false
+
+[view]
+# The groups this listener shows, by name. Empty shows every group; others are withheld on the
+# server, never sent.
+groups = []
+
+[stream]
+# Live updates over server-sent events. Off, every page polls once a poll interval.
+enabled = true
+# Pages streaming at once; past it a page polls instead.
+max_viewers = 16
+# Frames a second per page, at most. More costs CPU and bandwidth per viewer.
+frames_per_second = 4
+
+[metrics]
+# Prometheus exposition of numeric values at /metrics, behind the same auth.
+enabled = false
+# The prefix of every metric name.
+prefix = "admin_panel"
+
+[throttle]
+# Refuse an address with 429 after too many failed sign-ins.
+enabled = true
+# Failures allowed per address within the window.
+failures = 10
+# The window, in milliseconds.
+window_ms = 60000
+
+[write_limit]
+# Refuse an operator with 429 after too many changes in a minute.
+enabled = true
+# Changes one operator may make a minute.
+per_minute = 60

@@ -1,0 +1,16 @@
+{
+  // Declarations for `src/element`, the published `@osqd/admin-panel-builder/element` entry,
+  // which speaks DOM. The main project withholds the DOM lib so a stray `document` in the rest
+  // of src/ cannot type-check and then fail in Node; the element gets its own project rather
+  // than a hole in that one. Adapted from hackerpot.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src/element/**/*", "src/react.ts", "src/vue.ts"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts"]
+}

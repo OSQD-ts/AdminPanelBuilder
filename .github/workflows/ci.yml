@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# Least privilege: this workflow only builds and tests, so nothing a dependency's install script
+# runs on a fork's pull request inherits a writable token.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    name: node ${{ matrix.node }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      # First, deliberately: pretest, pretypecheck and prebuild regenerate the client bundle, so
+      # any later step would quietly repair a stale commit instead of failing on it.
+      - name: The committed client bundle is current
+        run: npm run client:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: The build emitted every entry
+        run: |
+          test -f dist/index.js && test -f dist/index.cjs && test -f dist/index.d.ts
+          test -f dist/adapters/index.js && test -f dist/themes/index.js && test -f dist/element.js
+          test -f dist/presets/index.js && test -f dist/cli.js && test -f dist/react.js && test -f dist/vue.js
+          node bin/apb.mjs --version
+
+  package:
+    runs-on: ubuntu-latest
+    name: package
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: No high-severity advisory reaches a consumer
+        run: npm audit --omit=dev --audit-level=high
+      - name: The packed tarball installs and every entry loads
+        run: npm run check:package
+
+  docs:
+    runs-on: ubuntu-latest
+    name: docs
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm run docs:check
+
+  # One engine is how a real bug ships: CSS is where engines differ.
+  browser:
+    runs-on: ubuntu-latest
+    name: browser (${{ matrix.engine }})
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps ${{ matrix.engine }}
+      - run: npm run test:browser
+        env:
+          BROWSER_ENGINE: ${{ matrix.engine }}
+
+  # The write path runs inside the application on every set(). The budgets are ratios against a
+  # reference loop measured in the same process, so they mean the same thing on any runner.
+  performance:
+    runs-on: ubuntu-latest
+    name: performance
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run bench:guard
+
+  # A ratchet, not a target: the thresholds sit just under where the suite stands.
+  coverage:
+    runs-on: ubuntu-latest
+    name: coverage
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage

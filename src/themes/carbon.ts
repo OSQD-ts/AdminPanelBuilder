@@ -1,0 +1,69 @@
+/**
+ * A theme after IBM's Carbon: the g10 and g100 themes, interactive blue #0f62fe, IBM Plex Sans where
+ * installed, square corners and no shadows, and the dark shell header Carbon keeps in both themes.
+ * Carbon's success green #24a148 measures 3.2:1 on white, too low for text, so the text shade
+ * #198038 stands in.
+ */
+import type { Theme } from "./types.js";
+
+export const carbonTheme: Theme = {
+  name: "carbon",
+  label: "Carbon",
+  light: {
+    background: "#f4f4f4",
+    surface: "#ffffff",
+    surfaceRaised: "#f4f4f4",
+    border: "#e0e0e0",
+    ink: "#161616",
+    inkSecondary: "#525252",
+    muted: "#6f6f6f",
+    accent: "#0f62fe",
+    link: "#0f62fe",
+    accentStrong: "#0f62fe",
+    onAccent: "#ffffff",
+    focus: "#0f62fe",
+    switchOn: "#198038",
+    ok: "#198038",
+    warn: "#8e6a00",
+    bad: "#da1e28",
+    headerBackground: "#161616",
+    headerInk: "#f4f4f4",
+    grid: "#e0e0e0",
+    shadow: "none",
+    chart: ["#6929c4", "#1192e8", "#005d5d", "#9f1853", "#fa4d56", "#570408", "#198038", "#002d9c"],
+  },
+  dark: {
+    background: "#161616",
+    surface: "#262626",
+    surfaceRaised: "#393939",
+    border: "#393939",
+    ink: "#f4f4f4",
+    inkSecondary: "#c6c6c6",
+    muted: "#a8a8a8",
+    accent: "#4589ff",
+    link: "#78a9ff",
+    accentStrong: "#0f62fe",
+    onAccent: "#ffffff",
+    focus: "#ffffff",
+    switchOn: "#42be65",
+    ok: "#42be65",
+    warn: "#f1c21b",
+    bad: "#fa4d56",
+    headerBackground: "#161616",
+    headerInk: "#f4f4f4",
+    grid: "#393939",
+    shadow: "none",
+    chart: ["#8a3ffc", "#33b1ff", "#007d79", "#ff7eb6", "#fa4d56", "#fff1f1", "#6fdc8c", "#4589ff"],
+  },
+  shape: {
+    font: '"IBM Plex Sans", "Helvetica Neue", Arial, system-ui, sans-serif',
+    monoFont: '"IBM Plex Mono", ui-monospace, Menlo, monospace',
+    fontSize: "14px",
+    radius: "0px",
+    radiusSmall: "0px",
+    spacing: "8px",
+    buttonCase: "none",
+    strongWeight: "600",
+  },
+  css: ".apb-header { border-bottom: 1px solid var(--apb-border); }\n",
+};
