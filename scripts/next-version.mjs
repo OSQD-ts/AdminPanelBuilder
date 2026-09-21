@@ -26,6 +26,10 @@
 // package.json. So the base here is whichever is higher, package.json or the newest tag.
 // Without that, the next automatic release after a tagged 1.2.0 would derive 0.1.1 from a
 // stale package.json and publish a version below the one already out.
+//
+// Before the first `v*` tag, package.json's version has never been released, so the first
+// releasing commit publishes it as it stands rather than bumping past it: a new package
+// starts at the 0.1.0 its changelog describes, not at 0.1.1.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -106,7 +110,8 @@ export function baseVersion(packageVersion, tag) {
  * The next version for a list of commit messages (newest first) on top of `current`, or
  * undefined when nothing in them releases. Throws on an unusable `Release-As`.
  */
-export function nextVersion(current, commits, say = () => undefined) {
+export function nextVersion(current, commits, say = () => undefined, options = {}) {
+  const unreleased = options.unreleased === true;
   let bump = "none";
   let declared;
   for (const commit of commits) {
@@ -123,7 +128,7 @@ export function nextVersion(current, commits, say = () => undefined) {
       throw new Error(`Release-As: ${declared.value} is neither a version nor a bump. Write a semver version like 1.0.0, or one of major, minor, patch.`);
     }
     const next = declared.kind === "version" ? declared.value : bumpVersion(current, declared.value);
-    if (!isForwards(current, next)) {
+    if (!isForwards(current, next) && !(unreleased && next === current)) {
       throw new Error(`Release-As: ${declared.value} asks for ${next}, which is not ahead of ${current}. A published version cannot be replaced.`);
     }
     say(`${current} → ${next}  (declared: Release-As: ${declared.value})`);
@@ -133,6 +138,10 @@ export function nextVersion(current, commits, say = () => undefined) {
   if (bump === "none") {
     say(commits.length === 0 ? "nothing new since the last release" : "no commit here changes what the package does");
     return undefined;
+  }
+  if (unreleased) {
+    say(`${current}, never released: published as it stands (${bump})`);
+    return current;
   }
   const next = bumpVersion(current, bump);
   say(`${current} → ${next}  (${bump})`);
@@ -158,7 +167,7 @@ function main() {
     .split("\0")
     .map((commit) => commit.trim())
     .filter(Boolean);
-  return nextVersion(current, commits, say);
+  return nextVersion(current, commits, say, { unreleased: tag === undefined });
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
