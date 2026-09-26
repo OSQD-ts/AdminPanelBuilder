@@ -16,6 +16,14 @@
   ],
   "license": "SEE LICENSE IN LICENSE",
   "author": "Michał Płatosz <platosz.michal@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OSQD-ts/AdminPanelBuilder.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OSQD-ts/AdminPanelBuilder/issues"
+  },
+  "homepage": "https://github.com/OSQD-ts/AdminPanelBuilder#readme",
   "type": "module",
   "exports": {
     ".": {
