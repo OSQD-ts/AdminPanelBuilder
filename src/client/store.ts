@@ -29,6 +29,7 @@ export interface Store {
   activeProfiles: Set<string>;
   marks: PanelState["marks"];
   actionStates: PanelState["actionStates"];
+  profileSchedules: NonNullable<PanelState["profileSchedules"]>;
 }
 
 export function createStore(schema: PanelSchema, state: PanelState): Store {
@@ -49,6 +50,7 @@ export function createStore(schema: PanelSchema, state: PanelState): Store {
     activeProfiles: new Set(),
     marks: {},
     actionStates: {},
+    profileSchedules: {},
   };
   mergeState(store, state, true);
   return store;
@@ -90,6 +92,7 @@ export function mergeState(store: Store, state: PanelState, replace: boolean): v
   store.activeProfiles = new Set(state.activeProfiles ?? []);
   store.marks = state.marks ?? {};
   store.actionStates = state.actionStates ?? {};
+  store.profileSchedules = state.profileSchedules ?? {};
   store.version = state.version;
   store.serverNow = state.now;
   store.skew = Date.now() - state.now;

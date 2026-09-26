@@ -9,8 +9,8 @@
 export {};
 
 const TOKEN = "demo-token-0123456789";
-const CHESS = "http://127.0.0.1:9780";
-const MAIL = "http://127.0.0.1:9781/admin";
+const SERVICE = "http://127.0.0.1:9780";
+const SHOP = "http://127.0.0.1:9781/admin";
 
 async function post(base: string, path: string, body: unknown, headers: Record<string, string> = {}): Promise<void> {
   const response = await fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
@@ -19,15 +19,14 @@ async function post(base: string, path: string, body: unknown, headers: Record<s
 
 const bearer = { authorization: `Bearer ${TOKEN}` };
 try {
-  await post(CHESS, "/api/values/max-rating-gap", { value: 350 }, bearer);
-  await post(CHESS, "/api/values/max-rating-gap", { value: 333 }, bearer);
-  await post(CHESS, "/api/values/featured-time-control", { value: "rapid" }, bearer);
-  await post(CHESS, "/api/values/featured-time-control", { value: "chess960" }, bearer);
-  await post(CHESS, "/api/actions/end-abandoned-games", {}, bearer);
-  await post(CHESS, "/api/values/maintenance-mode", { value: true }, { ...bearer, origin: "https://attacker.example" });
-  await post(CHESS, "/api/values/maintenance-mode", { value: true });
-  await post(MAIL, "/api/values/sendratepersecond", { value: 120 });
-  await post(MAIL, "/api/actions/retry-failed-messages", {});
+  await post(SERVICE, "/api/values/latency-objective", { value: 180 }, bearer);
+  await post(SERVICE, "/api/values/latency-objective", { value: 185 }, bearer);
+  await post(SERVICE, "/api/values/latency-objective", { value: 5000 }, bearer);
+  await post(SERVICE, "/api/actions/retry-every-failed-job", {}, bearer);
+  await post(SERVICE, "/api/values/latency-objective", { value: 200 }, { ...bearer, origin: "https://attacker.example" });
+  await post(SERVICE, "/api/values/latency-objective", { value: 200 });
+  await post(SHOP, "/api/values/reorder-below", { value: 15 });
+  await post(SHOP, "/api/actions/reorder-everything-low", {});
 } catch (error) {
   console.error(`The demo does not seem to be running (${error instanceof Error ? error.message : String(error)}). Start it with npm run demo.`);
   process.exit(1);

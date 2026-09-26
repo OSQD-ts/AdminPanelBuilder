@@ -183,6 +183,47 @@ export function fromBase64url(text: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-export function sessionCookie(name: string, value: string, path: string, maxAgeSeconds: number): string {
-  return `${name}=${value}; Path=${path}; HttpOnly; SameSite=Lax; Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`;
+export function sessionCookie(name: string, value: string, path: string, maxAgeSeconds: number, secure = false): string {
+  return `${name}=${value}; Path=${path}; HttpOnly; SameSite=Lax; Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}${secure ? "; Secure" : ""}`;
+}
+
+/**
+ * Whether the browser reached the panel over TLS: what the front end knows of its own socket, or
+ * what the proxy in front of it says in `x-forwarded-proto`. A cookie set on such a request carries
+ * `Secure`, so the browser never sends that credential back over plain HTTP; a panel served over
+ * HTTP — a loopback listener, most of them — sets it without, or the browser would drop it and
+ * nobody could sign in.
+ */
+export function overTls(request: { secure?: boolean | undefined; headers: Readonly<Record<string, string | undefined>> }): boolean {
+  if (request.secure === true) return true;
+  const forwarded = request.headers["x-forwarded-proto"]?.split(",")[0]?.trim().toLowerCase();
+  return forwarded === "https";
+}
+
+/**
+ * Where signed-out sessions are remembered so every replica refuses them: `auth.session.revocations`
+ * or `auth.oidc.revocations`. Signing out adds the session's id until it would have expired anyway;
+ * every request asks. Either method may reject: a failed `has` refuses the session, a failed `add`
+ * is reported and the local list still holds it.
+ */
+export interface RevocationStore {
+  add(id: string, expires: number): Promise<void>;
+  has(id: string): Promise<boolean>;
+}
+
+/**
+ * Revocations in Redis, one key per session id expiring with the session: `SET key 1 PX ttl` and
+ * `EXISTS key`. ioredis's argument form by default, node-redis's with `{ style: "node-redis" }`.
+ */
+export function redisRevocations(redis: { set(...args: unknown[]): Promise<unknown>; exists(key: string): Promise<number> }, options: { prefix?: string | undefined; style?: "ioredis" | "node-redis" | undefined; now?: (() => number) | undefined } = {}): RevocationStore {
+  const prefix = options.prefix ?? "apb:revoked:";
+  const now = options.now ?? (() => Date.now());
+  return {
+    async add(id, expires) {
+      const ttl = Math.max(1000, Math.ceil(expires - now()));
+      if (options.style === "node-redis") await redis.set(prefix + id, "1", { PX: ttl });
+      else await redis.set(prefix + id, "1", "PX", ttl);
+    },
+    has: async (id) => (await redis.exists(prefix + id)) > 0,
+  };
 }

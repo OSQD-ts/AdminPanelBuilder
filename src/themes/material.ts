@@ -41,6 +41,7 @@ export const materialTheme: Theme = {
     headerInk: "#ffffff",
     grid: "#eeeeee",
     shadow: "0 2px 1px -1px rgba(0,0,0,.2), 0 1px 1px 0 rgba(0,0,0,.14), 0 1px 3px 0 rgba(0,0,0,.12)",
+    shadowRaised: "0 2px 4px -1px rgba(0,0,0,.2), 0 4px 5px 0 rgba(0,0,0,.14), 0 1px 10px 0 rgba(0,0,0,.12)",
     chart: ["#1976d2", "#e66a00", "#00897b", "#c2185b", "#5e35b1", "#8d6e00", "#0097a7", "#616161"],
   },
   dark: {
@@ -64,6 +65,7 @@ export const materialTheme: Theme = {
     headerInk: "#ffffff",
     grid: "#2c2c2c",
     shadow: "0 2px 1px -1px rgba(0,0,0,.4), 0 1px 1px 0 rgba(0,0,0,.28), 0 1px 3px 0 rgba(0,0,0,.24)",
+    shadowRaised: "0 2px 4px -1px rgba(0,0,0,.5), 0 4px 5px 0 rgba(0,0,0,.36), 0 1px 10px 0 rgba(0,0,0,.3)",
     chart: ["#90caf9", "#ffb74d", "#4db6ac", "#f48fb1", "#b39ddb", "#e6c35c", "#4dd0e1", "#bdbdbd"],
   },
   shape: {

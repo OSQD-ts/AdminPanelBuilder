@@ -73,6 +73,11 @@ Several modifiable values set in one step:
 - **Refused at declaration**: a setting its value would refuse, a value that is not modifiable, and a
   value declared with `approval` — a profile would be a way around the second operator.
 - The page asks for a second click by default (`confirm: false` turns it off).
+- **For a while, later, or by a rule**, like a value: *For 1 h* reverts every value it set; **Later** applies
+  it at a time or every day or week at one; the card lists what is scheduled, with Cancel.
+- **`approval: true`** makes applying it a proposal a second operator approves; **`reason: "required"`**
+  refuses an application that does not say why.
+- **Undo** under Activity puts back every value it set, as one change, unless one has changed since.
 
 ## Related
 

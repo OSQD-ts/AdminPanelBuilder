@@ -38,6 +38,7 @@ export const appleTheme: Theme = {
     headerInk: "#000000",
     grid: "#e5e5ea",
     shadow: "none",
+    shadowRaised: "0 1px 3px rgba(0,0,0,.06), 0 6px 20px rgba(0,0,0,.08)",
     chart: ["#007aff", "#ff9500", "#34c759", "#ff2d55", "#af52de", "#a2845e", "#30b0c7", "#5856d6"],
   },
   dark: {
@@ -61,6 +62,7 @@ export const appleTheme: Theme = {
     headerInk: "#ffffff",
     grid: "#2c2c2e",
     shadow: "none",
+    shadowRaised: "0 1px 3px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.5)",
     chart: ["#0a84ff", "#ff9f0a", "#30d158", "#ff375f", "#bf5af2", "#ac8e68", "#40c8e0", "#5e5ce6"],
   },
   shape: {

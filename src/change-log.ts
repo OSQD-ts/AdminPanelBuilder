@@ -115,55 +115,137 @@ export function memoryChangeLog(): ChangeLogStore & { readonly records: ChangeRe
   };
 }
 
+/** How a file change log rotates and what it keeps. */
+export interface FileChangeLogOptions {
+  /** Start a new file past this size in bytes, or at the first write of a new UTC day with `"daily"`. */
+  rotate?: { maxBytes?: number | undefined; daily?: boolean | undefined } | undefined;
+  /** Rotated files kept, by count and by age; older ones are deleted. Default: all of them. */
+  keep?: { files?: number | undefined; days?: number | undefined } | undefined;
+  /** For tests. */
+  now?: (() => number) | undefined;
+}
+
+/** Smallest size a log may rotate at: below it, every few changes would start a file. */
+export const MIN_ROTATE_BYTES = 64 * 1024;
+
 /**
  * Change records as JSON lines in one file, appended asynchronously. Loading reads at most the last
- * megabyte, so a log years long costs the same start-up as a fresh one. `node:fs` is imported on
- * first use, keeping the root entry loadable on runtimes without it.
+ * megabyte of each file it needs, so a log years long costs the same start-up as a fresh one.
+ * `node:fs` is imported on first use, keeping the root entry loadable on runtimes without it.
+ *
+ * With `rotate`, the file is renamed to `<path>.<UTC timestamp>` when it grows past `maxBytes` or a
+ * new day begins, and a fresh one started; the hash chain carries on across files, so a missing file
+ * between two others shows as a gap (`apb verify-log <path>` checks every rotated file with it).
+ * With `keep`, rotated files past the count or the age are deleted after each rotation.
  */
-export function fileChangeLog(path: string): ChangeLogStore {
+export function fileChangeLog(path: string, options: FileChangeLogOptions = {}): ChangeLogStore {
+  const maxBytes = options.rotate?.maxBytes;
+  if (maxBytes !== undefined && (!Number.isFinite(maxBytes) || maxBytes < MIN_ROTATE_BYTES)) throw new RangeError(`fileChangeLog: rotate.maxBytes is at least ${MIN_ROTATE_BYTES}`);
+  const keepFiles = options.keep?.files;
+  const keepDays = options.keep?.days;
+  if (keepFiles !== undefined && (!Number.isInteger(keepFiles) || keepFiles < 1)) throw new RangeError("fileChangeLog: keep.files is a whole number above zero");
+  if (keepDays !== undefined && (!Number.isFinite(keepDays) || keepDays <= 0)) throw new RangeError("fileChangeLog: keep.days is a number of days above zero");
+  const now = options.now ?? (() => Date.now());
   let queue: Promise<void> = Promise.resolve();
+  /** The UTC day the current file was last written on, for daily rotation. */
+  let writtenDay: string | undefined;
+
+  const readTail = async (file: string): Promise<ChangeRecord[]> => {
+    const { open } = await import("node:fs/promises");
+    let handle: Awaited<ReturnType<typeof open>>;
+    try {
+      handle = await open(file, "r");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    try {
+      const { size } = await handle.stat();
+      const length = Math.min(size, 1024 * 1024);
+      const buffer = new Uint8Array(length);
+      await handle.read(buffer, 0, length, size - length);
+      const lines = new TextDecoder().decode(buffer).split("\n");
+      if (length < size) lines.shift();
+      const records: ChangeRecord[] = [];
+      for (const line of lines) {
+        if (line.trim() === "") continue;
+        try {
+          records.push(JSON.parse(line) as ChangeRecord);
+        } catch {
+          // A torn last line from a crash mid-write is skipped rather than refusing the rest.
+        }
+      }
+      return records;
+    } finally {
+      await handle.close();
+    }
+  };
+
+  const rotate = async (): Promise<void> => {
+    const { rename, readdir, rm, stat } = await import("node:fs/promises");
+    const { basename, dirname, join } = await import("node:path");
+    // Milliseconds included, so two rotations in one second never share a name.
+    const stamp = new Date(now()).toISOString().replace(/[-:.]/g, "");
+    await rename(path, `${path}.${stamp}`);
+    if (keepFiles === undefined && keepDays === undefined) return;
+    const rotated = await rotatedFiles(path, { readdir, basename, dirname, join });
+    const expired = new Set(keepFiles === undefined ? [] : rotated.slice(0, Math.max(0, rotated.length - keepFiles)));
+    if (keepDays !== undefined) {
+      for (const file of rotated) if (now() - (await stat(file)).mtimeMs > keepDays * 86_400_000) expired.add(file);
+    }
+    for (const file of expired) await rm(file, { force: true });
+  };
+
   return {
     async load(limit) {
-      const { open } = await import("node:fs/promises");
-      let handle: Awaited<ReturnType<typeof open>>;
-      try {
-        handle = await open(path, "r");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-        throw error;
+      const records = await readTail(path);
+      if (records.length >= limit || options.rotate === undefined) return records.slice(-limit);
+      // Just after a rotation the current file is short: the newest rotated ones fill the page.
+      const { readdir } = await import("node:fs/promises");
+      const { basename, dirname, join } = await import("node:path");
+      const rotated = await rotatedFiles(path, { readdir, basename, dirname, join });
+      let all = records;
+      for (const file of rotated.reverse()) {
+        if (all.length >= limit) break;
+        all = [...(await readTail(file)), ...all];
       }
-      try {
-        const { size } = await handle.stat();
-        const length = Math.min(size, 1024 * 1024);
-        const buffer = new Uint8Array(length);
-        await handle.read(buffer, 0, length, size - length);
-        const lines = new TextDecoder().decode(buffer).split("\n");
-        if (length < size) lines.shift();
-        const records: ChangeRecord[] = [];
-        for (const line of lines) {
-          if (line.trim() === "") continue;
-          try {
-            records.push(JSON.parse(line) as ChangeRecord);
-          } catch {
-            // A torn last line from a crash mid-write is skipped rather than refusing the rest.
-          }
-        }
-        return records.slice(-limit);
-      } finally {
-        await handle.close();
-      }
+      return all.slice(-limit);
     },
     append(record) {
       const next = queue.then(async () => {
-        const { appendFile, mkdir } = await import("node:fs/promises");
+        const { appendFile, mkdir, stat } = await import("node:fs/promises");
         const { dirname } = await import("node:path");
         await mkdir(dirname(path), { recursive: true });
+        if (options.rotate !== undefined) {
+          const size = await stat(path).then(
+            (found) => found.size,
+            () => 0,
+          );
+          const day = new Date(now()).toISOString().slice(0, 10);
+          writtenDay ??= size > 0 ? await stat(path).then((found) => new Date(found.mtimeMs).toISOString().slice(0, 10)) : day;
+          if (size > 0 && ((maxBytes !== undefined && size >= maxBytes) || (options.rotate.daily === true && day !== writtenDay))) await rotate();
+          writtenDay = day;
+        }
         await appendFile(path, `${JSON.stringify(record)}\n`, "utf8");
       });
       queue = next.catch(() => undefined);
       return next;
     },
   };
+}
+
+/** A log's rotated files, oldest first: `<path>.<timestamp>` sorts by time as text. */
+export async function rotatedFiles(
+  path: string,
+  fs?: { readdir(dir: string): Promise<string[]>; basename(path: string): string; dirname(path: string): string; join(...parts: string[]): string },
+): Promise<string[]> {
+  const tools = fs ?? { readdir: (await import("node:fs/promises")).readdir, ...(await import("node:path")) };
+  const prefix = `${tools.basename(path)}.`;
+  const names = await tools.readdir(tools.dirname(path)).catch(() => [] as string[]);
+  return names
+    .filter((name) => name.startsWith(prefix) && /^\d{8}T\d{9}Z$/.test(name.slice(prefix.length)))
+    .sort()
+    .map((name) => tools.join(tools.dirname(path), name));
 }
 
 /** SHA-256 over the previous hash and the record's content, the chain fields and nothing else left out. */

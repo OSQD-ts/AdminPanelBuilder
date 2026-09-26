@@ -12,12 +12,39 @@ import * as testing from "../src/testing.js";
 
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
+describe("the source itself", () => {
+  it("is text: no control character makes a file binary to grep", () => {
+    const { readdirSync, readFileSync, statSync } = require("node:fs") as typeof import("node:fs");
+    const walk = (directory: string): string[] =>
+      readdirSync(new URL(`../${directory}/`, import.meta.url)).flatMap((name) => {
+        const path = `${directory}/${name}`;
+        if (statSync(new URL(`../${path}`, import.meta.url)).isDirectory()) return walk(path);
+        return name.endsWith(".ts") || name.endsWith(".mjs") ? [path] : [];
+      });
+    // A NUL in a source file is legal TypeScript and invisible in an editor, and it makes `grep`,
+    // `file` and every tool that sniffs for text call the file binary and skip it.
+    const binary = walk("src")
+      .concat(walk("scripts"))
+      .filter((path) => path !== "src/client.generated.ts")
+      .filter((path) => /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(readFileSync(new URL(`../${path}`, import.meta.url), "utf8")));
+    expect(binary).toEqual([]);
+  });
+});
+
 describe("docs/reference/limits.md", () => {
+  const exported = { ...root, ...adapters, ...config, ...sdk, ...testing } as unknown as Record<string, unknown>;
+
   it("states every cap at the value the code holds", () => {
     const rows = [...read("docs/reference/limits.md").matchAll(/^\| `([A-Z_]+)` \| (\d+) \|/gm)].map((match) => [match[1], Number(match[2])] as const);
-    const exported = { ...root, ...adapters, ...config } as unknown as Record<string, unknown>;
     expect(rows.length).toBeGreaterThan(10);
     for (const [name, value] of rows) expect([name, exported[name as string]]).toEqual([name, value]);
+  });
+
+  it("lists every cap the code exports, so a new one cannot ship undocumented", () => {
+    const listed = new Set([...read("docs/reference/limits.md").matchAll(/^\| `([A-Z_]+)` \|/gm)].map((match) => match[1] as string));
+    const caps = Object.entries(exported).filter(([name, value]) => /^(MAX|MIN|DEFAULT)_/.test(name) && typeof value === "number");
+    expect(caps.filter(([name]) => !listed.has(name)).map(([name]) => name)).toEqual([]);
+    expect([...listed].filter((name) => !(name in exported))).toEqual([]);
   });
 });
 

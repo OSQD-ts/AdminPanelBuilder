@@ -61,7 +61,8 @@ Inferred from the starting value, or set with `kind`:
 | `visibleWhen` | all | `() => boolean`: the card is hidden while it answers false, and an edit is refused |
 | `disabledWhen` | all | `() => reason or false`: shown, but not changeable, with the reason beside the controls |
 | `timeline` | all | Recent changes kept to show beside the card: default 20 for text, choices and switches, 0 for numbers (which get a chart), never for sensitive values |
-| `span` | all | Grid columns the card takes: 1, 2, 3 or `"full"` |
+| `span` | all | Grid columns the card takes: 1, 2, 3 or `"full"`; superseded by `size` |
+| `size` | all | Cells the card takes in its group's grid: `{ w, h }`. See [groups](groups.md) |
 | `min`, `max` | all | Range; for a viewable, only the scale of a gauge |
 | `step`, `integer` | modifiable | Accepted numbers are `min + k × step`; whole numbers only |
 | `options` | modifiable | The accepted values |
@@ -73,6 +74,7 @@ Inferred from the starting value, or set with `kind`:
 | `confirm` | modifiable | The page asks for a second click |
 | `approval` | modifiable | A change is a proposal until a second operator approves it; see [changes](../operations/changes-and-notices.md#approvals) |
 | `timed` | modifiable | Offer "for a while" on the page; the change reverts itself. Default true |
+| `reason` | modifiable | `"required"`: a change must say why, and is refused without it; `"optional"` (the default) offers the field. Always required with `approval` |
 | `editable` | bind | Offer the bound property for editing |
 
 ## Thresholds

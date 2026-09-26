@@ -47,7 +47,7 @@ describe("grants narrow one operator below the listener", () => {
     const asSam = { authorization: "Bearer sams-token-is-long-enough", ...write };
     const schema = await call(router, "GET", "/api/schema", { headers: asSam });
     expect(schema.json.schema.groups.map((group: { title: string }) => group.title)).toEqual(["Mail"]);
-    expect(schema.json.schema.restrictions.at(-1)).toMatch(/Your sign-in narrows/);
+    expect(schema.json.schema.restrictions.at(-1)).toMatchObject({ text: expect.stringMatching(/Your sign-in narrows/), key: "restrictionGrants" });
     expect((await call(router, "POST", "/api/values/limit", { headers: asSam, body: '{"value":2}' })).status).toBe(404);
     expect((await call(router, "POST", "/api/values/note", { headers: asSam, body: '{"value":"y"}' })).status).toBe(200);
     expect((await call(router, "POST", "/api/values/limit", { headers: jsonWrite, body: '{"value":2}' })).status).toBe(200);

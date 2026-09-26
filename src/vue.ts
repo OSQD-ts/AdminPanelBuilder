@@ -19,12 +19,21 @@ export interface VueLike {
 export function createAdminPanelVueComponent(Vue: VueLike): unknown {
   return Vue.defineComponent({
     name: "AdminPanel",
-    props: { src: { type: String, required: true }, scheme: { type: String, required: false } },
-    setup(props: { src: string; scheme?: string }) {
+    props: { src: { type: String, required: true }, scheme: { type: String, required: false }, group: { type: String, required: false }, compact: { type: Boolean, required: false } },
+    setup(props: { src: string; scheme?: string; group?: string; compact?: boolean }) {
       Vue.onMounted(() => {
         defineAdminPanelElement();
       });
-      return () => Vue.h("admin-panel", props.scheme === undefined ? { src: props.src } : { src: props.src, scheme: props.scheme });
+      return () => Vue.h("admin-panel", elementAttributes(props));
     },
   });
+}
+
+/** What `<admin-panel>` is given; a boolean attribute is present or absent, never "false". */
+export function elementAttributes(props: { src: string; scheme?: string | undefined; group?: string | undefined; compact?: boolean | undefined }): Record<string, string> {
+  const attributes: Record<string, string> = { src: props.src };
+  if (props.scheme !== undefined) attributes.scheme = props.scheme;
+  if (props.group !== undefined) attributes.group = props.group;
+  if (props.compact === true) attributes.compact = "";
+  return attributes;
 }

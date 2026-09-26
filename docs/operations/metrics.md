@@ -31,6 +31,11 @@ ch3ss_notices 1
   newline would let what follows read as another sample.
 - **Withheld means withheld**: sensitive values are never exported, and a listener's `groups` apply.
 
+**OpenTelemetry.** The same series without a scrape: `otelMetrics(panel, meterProvider, { prefix,
+groups })` registers observable instruments — `<prefix>.value`, `.count`, `.changes`, `.notices` — read
+when your SDK collects, never on the write path. The package imports no OpenTelemetry; your provider is
+typed by the few methods used.
+
 The number worth alerting on is `_changes_total{ok="false"}`: an action failing, a proposal turned
 down. A counter cannot tell you a number is unusual; `_value` with your own thresholds can.
 

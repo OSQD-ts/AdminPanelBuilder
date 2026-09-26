@@ -17,11 +17,14 @@ What is there. Changes when anything is declared, moved or reconfigured; `struct
 ```ts
 {
   title: string; instance?: string; version: string; structure: number;
-  theme: { name: string; scheme: "auto" | "light" | "dark" };
+  theme: { name: string; scheme: "auto" | "light" | "dark"; offered?: Array<{ name: string; label: string }> };
+  grid: { columns: number; rowHeight: number };   // every group's, unless it has its own
+  layout?: Record<string, { order?: string[]; sizes?: Record<string, { w: number; h: number }> }>;
+  layoutWritable?: boolean;        // this viewer may save a layout for everybody
   pollMs: number;
   controls: { edit: boolean; actions: boolean };
-  restrictions: string[];          // sentences: what this listener does not allow, and why
-  groups: Array<{ id: string; title: string; description?: string; items: ItemSchema[] }>;
+  restrictions: Restriction[];     // what this listener does not allow, and why: { text, key, params? }
+  groups: Array<{ id: string; title: string; description?: string; grid?: { columns: number; rowHeight: number }; items: ItemSchema[] }>;
 }
 ```
 
@@ -40,7 +43,7 @@ What is there. Changes when anything is declared, moved or reconfigured; `struct
   `{ value, label, to? }`, `to` absent for a sensitive value.
 
 A value item also carries `writable` (this listener lets the viewer change it), `approval`, `timed` and
-`span`; a chart carries `stacked`, `lines` (`{ label, value? , from? }`) and `bins` when set. A group
+`span`; every item carries `size` (`{ w, h }`) when code gave one; a chart carries `stacked`, `lines` (`{ label, value? , from? }`) and `bins` when set. A group
 carries `layout`. The schema carries `locale`, `messages` when replaced, and `stream: true` when the
 listener streams.
 
@@ -71,11 +74,23 @@ currently hides or disables.
 **`FeedEntry`**: `{ seq, at, level: "info" | "warn" | "bad", text, fields? }`. `text` is capped at 1,000
 characters; `fields` is present when the entry was pushed as fields and fits in 4 KB of JSON.
 
-**`PendingChange`**: `{ id, target, label, to?, by, at, expiresAt }`.
+**`PendingChange`**: `{ id, kind?, target, label, to?, by, at, expiresAt, reason?, applyAt? }`; `kind` is
+`"action"` or `"profile"` for those, absent for a value's.
 
-**`WireValue`**: `{ id, value, text?, error?, masked?, at, by?, version }`. `value` is JSON; it is `null`
-with `text` set for a non-finite number or a value over 64 KB of JSON, `null` with `masked: true` for a
-sensitive value, and `null` with `error` when reading it failed.
+**`ScheduledChange`**: `{ id, at, by, to?, reason?, repeat?, revertAfterMs? }`; `at` is the next run of a
+repeating one. `PanelState.profileSchedules` lists them by profile id.
+
+**`WireValue`**: `{ id, value, text?, textKey?, textParams?, error?, errorKey?, errorParams?, masked?, at, by?, version }`.
+`value` is JSON; it is `null` with `text` set for a non-finite number or a value over 64 KB of JSON,
+`null` with `masked: true` for a sensitive value, and `null` with `error` when reading it failed.
+`error` is the English sentence, as it has always been; `errorKey` and `errorParams` are the same
+sentence in parts (`readFailed`, `{ label, reason }`), so a page says the frame around the
+application's own message in the viewer's language; `textKey` and `textParams` do the same for a note
+the panel wrote about the value (`valueTooLarge`), and are absent where `text` is a number's own
+spelling (`"NaN"`, `"Infinity"`).
+
+**`Restriction`**: `{ text, key, params? }` — a sentence about what a listener does not allow: the
+English, and the key that says it in the viewer's language.
 
 **`Sample`**: `[t, y]` over time, `[t, y, x]` against another value. `t` is the start of the sample's
 one-second bucket; a re-sent newest bucket has the same `t` and replaces the one held.
@@ -93,6 +108,7 @@ one-second bucket; a re-sent newest bucket has the same `t` and replaces the one
   target: string; label: string; by: string; at: number;
   from?: JsonValue; to?: JsonValue; outcome?: string; ok: boolean; revertible?: boolean;
   origin?: string;    // the replica that made it, when it arrived from another
+  reason?: string;    // why, in the words of whoever made it
   hash?: string; prevHash?: string;   // the tamper-evident chain; see operations/audit.md
 }
 ```
@@ -103,8 +119,14 @@ action `to` holds the input it was given. `revertible` is computed when the list
 ## Notice
 
 ```ts
-{ id: string; level: "info" | "warning"; message: string; at: number }
+{ id: string; level: "info" | "warning"; message: string; key?: string; params?: Record<string, string | number>; at: number }
 ```
+
+`message` is English, as every caller has always been sent it. `key` and `params` are there when the
+panel wrote the notice about its own machinery — a store that could not be written, a replica that
+could not be reached, a getter that threw — so a page says it in the viewer's language; they are
+absent for words the panel did not write itself, such as an alert's sentence, which reads the same
+here, in the change log and in a webhook.
 
 ## Related
 

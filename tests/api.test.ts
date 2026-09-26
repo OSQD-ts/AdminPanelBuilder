@@ -28,8 +28,8 @@ describe("the OpenAPI document", () => {
     const { router, panel } = fixture();
     const doc = (await call(router, "GET", "/api/openapi.json", { headers: jsonWrite })).json as { openapi: string; paths: Record<string, Record<string, unknown>> };
     expect(doc.openapi).toBe("3.1.0");
-    panel.edit("guarded", 2, "sam", { groups: undefined, edit: true, actions: true, restrictions: [] });
-    const ids: Record<string, string> = { id: "limit", table: "rows", action: "drop" };
+    panel.edit("guarded", 2, "sam", { groups: undefined, edit: true, actions: true, restrictions: [] }, { reason: "a test" });
+    const ids: Record<string, string> = { id: "limit", table: "rows", action: "drop", locale: "de" };
     for (const [template, operations] of Object.entries(doc.paths)) {
       const path = template.replace(/\{(\w+)\}/g, (_, name: string) => ids[name] ?? "x");
       for (const method of Object.keys(operations)) {
@@ -42,8 +42,22 @@ describe("the OpenAPI document", () => {
   it("lists every route the router answers", async () => {
     const { router } = fixture();
     const doc = (await call(router, "GET", "/api/openapi.json", { headers: jsonWrite })).json as { paths: Record<string, unknown> };
-    const routes = ["/api/schema", "/api/state", "/api/stream", "/api/changes", "/api/notices", "/api/settings", "/api/openapi.json", "/api/tables/{id}", "/api/values/{id}", "/api/schedules/{id}/cancel", "/api/actions/{id}", "/api/profiles/{id}", "/api/pending/{id}/approve", "/api/pending/{id}/reject", "/api/changes/{id}/undo", "/api/tables/{table}/actions/{action}", "/api/settings/diff", "/api/settings/apply"];
+    const routes = ["/api/schema", "/api/state", "/api/stream", "/api/changes", "/api/notices", "/api/settings", "/api/openapi.json", "/api/tables/{id}", "/api/values/{id}", "/api/schedules/{id}/cancel", "/api/actions/{id}", "/api/profiles/{id}", "/api/pending/{id}/approve", "/api/pending/{id}/reject", "/api/changes/{id}/undo", "/api/tables/{table}/actions/{action}", "/api/settings/diff", "/api/settings/apply", "/api/layout", "/api/messages/{locale}"];
     expect(Object.keys(doc.paths).sort()).toEqual(routes.sort());
+  });
+
+  it("lists the operational routes a listener switches on, and only then", async () => {
+    const { panel } = fixture();
+    const off = (await call(routerFor(panel, { auth: { token: TOKEN } }), "GET", "/api/openapi.json", { headers: jsonWrite })).json as { paths: Record<string, unknown> };
+    expect(Object.keys(off.paths)).toEqual(expect.not.arrayContaining(["/healthz", "/metrics"]));
+    const on = (await call(routerFor(panel, { auth: { token: TOKEN }, health: true, metrics: true }), "GET", "/api/openapi.json", { headers: jsonWrite })).json as {
+      paths: Record<string, { get: { responses: Record<string, { content?: Record<string, unknown> }> } }>;
+    };
+    expect(Object.keys(on.paths)).toEqual(expect.arrayContaining(["/healthz", "/metrics"]));
+    // Both answer text, and health answers before anybody signs in.
+    expect(Object.keys(on.paths["/healthz"]?.get.responses["200"]?.content ?? {})).toEqual(["text/plain"]);
+    expect(on.paths["/healthz"]?.get.responses["401"]).toBeUndefined();
+    expect(on.paths["/metrics"]?.get.responses["401"]).toBeDefined();
   });
 });
 
@@ -113,12 +127,66 @@ describe("settings through the API", () => {
     const exported = await call(router, "GET", "/api/settings", { headers: jsonWrite });
     expect(exported.json.settings).toMatchObject({ limit: 10, handle: "ada", flag: false });
     const diff = await call(router, "POST", "/api/settings/diff", { headers: jsonWrite, body: '{"settings":{"limit":20,"flag":false,"guarded":3,"ghost":1}}' });
-    expect(diff.json).toEqual({ diff: [{ id: "limit", label: "Limit", from: 10, to: 20 }, { id: "guarded", label: "Guarded", from: 1, to: 3, error: expect.stringMatching(/approval/) }], unknown: ["ghost"] });
+    expect(diff.json).toEqual({
+      diff: [
+        { id: "limit", label: "Limit", from: 10, to: 20 },
+        // The sentence, and the key a page says it in the viewer's language with.
+        { id: "guarded", label: "Guarded", from: 1, to: 3, error: expect.stringMatching(/approval/), errorKey: "refuseImportApproval", errorParams: { label: "Guarded" } },
+      ],
+      unknown: ["ghost"],
+    });
     expect((await call(router, "POST", "/api/settings/apply", { headers: jsonWrite, body: '{"settings":{"limit":20,"ghost":1}}' })).status).toBe(400);
     const applied = await call(router, "POST", "/api/settings/apply", { headers: jsonWrite, body: '{"settings":{"limit":20,"flag":true}}' });
     expect(applied.json).toEqual({ changed: 2 });
     expect(panel.changes().at(-1)).toMatchObject({ kind: "import", from: { limit: 10, flag: false }, to: { limit: 20, flag: true } });
     expect((await call(router, "POST", "/api/settings/apply", { headers: jsonWrite, body: '{"settings":[1]}' })).status).toBe(400);
     expect((await call(router, "POST", "/api/settings/apply", { headers: jsonWrite, body: '{"settings":{"limit":20}}' })).json).toEqual({ changed: 0 });
+  });
+});
+
+describe("every answer against the OpenAPI document", () => {
+  it("fits the schema the document gives for its route and status", async () => {
+    const { checkSchema } = await import("./support/schema-check.js");
+    const { panel, router } = fixture();
+    const feed = panel.feed("Events", { group: "Game" });
+    feed.push("started", "warn");
+    const doc = (await call(router, "GET", "/api/openapi.json", { headers: jsonWrite })).json as Record<string, unknown> & { paths: Record<string, Record<string, { responses: Record<string, { content?: Record<string, { schema: Record<string, unknown> }> }> }>> };
+    const proposal = panel.edit("guarded", 2, "sam", { groups: undefined, edit: true, actions: true, restrictions: [] }, { reason: "a test" });
+    const pendingId = proposal.ok && "pending" in proposal ? proposal.pending.id : "";
+    const at = Date.parse("2026-09-21T13:00:00Z");
+    const requests: Array<[string, string, string, string?]> = [
+      ["/api/schema", "GET", "/api/schema"],
+      ["/api/state", "GET", "/api/state"],
+      ["/api/changes", "GET", "/api/changes"],
+      ["/api/notices", "GET", "/api/notices"],
+      ["/api/settings", "GET", "/api/settings"],
+      ["/api/messages/{locale}", "GET", "/api/messages/de"],
+      ["/api/tables/{id}", "GET", "/api/tables/rows"],
+      ["/api/values/{id}", "POST", "/api/values/limit", '{"value":20,"reason":"x"}'],
+      ["/api/values/{id}", "POST", "/api/values/limit", `{"value":30,"at":${at}}`],
+      ["/api/values/{id}", "POST", "/api/values/limit", '{"value":500}'],
+      ["/api/values/{id}", "POST", "/api/values/guarded", '{"value":3,"reason":"x"}'],
+      ["/api/actions/{id}", "POST", "/api/actions/flush", "{}"],
+      ["/api/profiles/{id}", "POST", "/api/profiles/busy", "{}"],
+      ["/api/pending/{id}/reject", "POST", `/api/pending/${pendingId}/reject`, "{}"],
+      ["/api/changes/{id}/undo", "POST", "/api/changes/99999/undo", "{}"],
+      ["/api/tables/{table}/actions/{action}", "POST", "/api/tables/rows/actions/drop", '{"row":"a"}'],
+      ["/api/settings/diff", "POST", "/api/settings/diff", '{"settings":{"limit":1}}'],
+      ["/api/settings/apply", "POST", "/api/settings/apply", '{"settings":{"flag":true}}'],
+      ["/api/layout", "POST", "/api/layout", '{"layout":{"game":{"order":["value:limit"],"sizes":{"value:limit":{"w":6,"h":3}}}}}'],
+      ["/api/layout", "POST", "/api/layout", '{"layout":null}'],
+    ];
+    const problems: string[] = [];
+    for (const [template, method, path, body] of requests) {
+      const answer = await call(router, method, path, { headers: jsonWrite, ...(body === undefined ? {} : { body }) });
+      const documented = doc.paths[template]?.[method.toLowerCase()]?.responses[String(answer.status)];
+      if (documented === undefined) {
+        problems.push(`${method} ${path} answered ${answer.status}, which the document does not list`);
+        continue;
+      }
+      const schema = documented.content?.["application/json"]?.schema;
+      if (schema !== undefined) problems.push(...checkSchema(answer.json, schema, doc).map((problem) => `${method} ${path} (${answer.status}) ${problem}`));
+    }
+    expect(problems).toEqual([]);
   });
 });

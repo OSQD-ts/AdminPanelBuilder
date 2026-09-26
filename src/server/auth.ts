@@ -11,7 +11,7 @@ import type { Clock } from "../internal/clock.js";
 import { rejectUnknown } from "../internal/options.js";
 import type { Grants } from "../panel/scope.js";
 import { type AuthContext, createOidc } from "./oidc.js";
-import { checkGrants, checkSecret, RevocationList, SESSION_COOKIE, sessionCookie, sessionInfo } from "./session.js";
+import { checkGrants, checkSecret, overTls, RevocationList, SESSION_COOKIE, sessionCookie, sessionInfo } from "./session.js";
 import type { AuthRequest, PanelAuth, PanelResponse } from "./types.js";
 
 /** The header a delegate token names the operator it acts for in. */
@@ -45,7 +45,8 @@ export function createAuthenticator(auth: PanelAuth | undefined, where: string):
 
   if ("session" in auth) {
     rejectUnknown(auth, ["session"], `${where}: auth`);
-    rejectUnknown(auth.session, ["secret", "cookie", "revoked", "now"], `${where}: auth.session`);
+    rejectUnknown(auth.session, ["secret", "cookie", "revoked", "revocations", "now"], `${where}: auth.session`);
+    const revocations = auth.session.revocations;
     const secret = checkSecret(auth.session.secret, `${where}: auth.session`);
     const cookie = auth.session.cookie ?? SESSION_COOKIE;
     const revoked = auth.session.revoked;
@@ -57,6 +58,7 @@ export function createAuthenticator(auth: PanelAuth | undefined, where: string):
       if (info === undefined || signedOut.has(info.id, now())) return undefined;
       // A revocation check that fails has not admitted anybody.
       if (revoked !== undefined && (await Promise.resolve().then(() => revoked(info.id)).catch(() => true))) return undefined;
+      if (revocations !== undefined && (await revocations.has(info.id).catch(() => true))) return undefined;
       return info;
     };
     return {
@@ -69,8 +71,12 @@ export function createAuthenticator(auth: PanelAuth | undefined, where: string):
       async handle(context) {
         if (context.path !== "/auth/logout") return undefined;
         const info = await read(context.headers.cookie);
-        if (info !== undefined) signedOut.add(info.id, info.expires);
-        return { status: 303, headers: { location: `${context.basePath}/`, "set-cookie": sessionCookie(cookie, "", context.basePath || "/", 0), "cache-control": "no-store" }, body: "" };
+        if (info !== undefined) {
+          signedOut.add(info.id, info.expires);
+          // Other replicas learn of it here; this one refuses it already, whatever the store says.
+          await revocations?.add(info.id, info.expires).catch(() => undefined);
+        }
+        return { status: 303, headers: { location: `${context.basePath}/`, "set-cookie": sessionCookie(cookie, "", context.basePath || "/", 0, overTls(context)), "cache-control": "no-store" }, body: "" };
       },
     };
   }

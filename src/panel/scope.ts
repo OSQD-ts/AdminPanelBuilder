@@ -6,7 +6,7 @@
  * grants are intersected with the listener's, so a listener's configuration is always the ceiling.
  */
 import type { Refusal } from "../errors.js";
-import type { PendingChange, WireValue } from "../types.js";
+import type { PendingChange, Restriction, WireValue } from "../types.js";
 
 /**
  * The part of a panel one request is shown.
@@ -22,7 +22,7 @@ export interface PanelScope {
   edit: boolean | ReadonlySet<string>;
   actions: boolean | ReadonlySet<string>;
   /** Sentences the page shows about what this listener does not allow, and why. */
-  restrictions: readonly string[];
+  restrictions: readonly Restriction[];
 }
 
 /** What a sign-in may say about one operator: at most these groups, at most these powers. */
@@ -39,7 +39,7 @@ export type EditOutcome =
   | { ok: true; value: WireValue }
   | { ok: true; pending: PendingChange }
   | { ok: false; reason: "not-found" | "not-editable" | "not-allowed" | "invalid" | "conflict"; message: string; refusal?: Refusal | undefined };
-export type ActionOutcome = { ok: true; message: string } | { ok: false; reason: "not-found" | "not-allowed" | "invalid" | "failed"; message: string; refusal?: Refusal | undefined };
+export type ActionOutcome = { ok: true; message: string } | { ok: true; pending: PendingChange } | { ok: false; reason: "not-found" | "not-allowed" | "invalid" | "failed"; message: string; refusal?: Refusal | undefined };
 
 /** Whether a scope lets the viewer edit values in `group`. */
 export function canEdit(scope: PanelScope, group: string): boolean {

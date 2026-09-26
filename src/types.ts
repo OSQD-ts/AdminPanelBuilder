@@ -46,6 +46,25 @@ export type StatusRule = { warn?: number | undefined; bad?: number | undefined; 
 /** How many grid columns a card spans, or the whole row. */
 export type Span = 1 | 2 | 3 | "full";
 
+/**
+ * A card's size in its group's grid of cells: `w` columns out of the grid's (12 unless the panel or
+ * group says otherwise) and `h` rows. `h` is a minimum: a row grows when what the card shows needs
+ * more room, so a size never cuts content off.
+ */
+export interface CardSize {
+  w: number;
+  h: number;
+}
+
+/** How one group's cards are arranged: their order by card id (`value:<id>`, `chart:<id>`, …), and sizes over the declared ones. */
+export interface GroupLayout {
+  order?: string[];
+  sizes?: Record<string, CardSize>;
+}
+
+/** A layout of the whole panel, by group id: what "Save for everybody" stores, and "Save for me" keeps in the browser. */
+export type PanelLayout = Record<string, GroupLayout>;
+
 /** A horizontal line across a chart: a fixed number, or another value's current reading (a limit, a target). */
 export interface ChartLine {
   value: number | PanelValue<number>;
@@ -111,8 +130,13 @@ interface CommonOptions {
   group?: string | undefined;
   /** Position within the group; lower first, ties in order of declaration. */
   order?: number | undefined;
-  /** Grid columns the card spans. Default 1; a table or a shared chart spans the whole row. */
+  /** Grid columns the card spans. Default 1; a table or a shared chart spans the whole row. Superseded by `size`. */
   span?: Span | undefined;
+  /**
+   * Cells the card takes in its group's grid: `w` of the grid's columns (12 unless it says
+   * otherwise) and `h` rows, a minimum height. Default: chosen from what the card shows.
+   */
+  size?: CardSize | undefined;
 }
 
 export interface ViewableOptions extends CommonOptions {
@@ -213,6 +237,12 @@ export interface ModifiableOptions<T> extends ViewableOptions {
    * approve it, and an unapproved change expires after an hour.
    */
   approval?: boolean | undefined;
+  /**
+   * Whether an operator's change says why: `"required"` refuses one without a reason, `"optional"`
+   * (the default) offers the field. A value declared with `approval` always requires one: the
+   * second operator decides on it.
+   */
+  reason?: "required" | "optional" | undefined;
   /** Offer "for a while" on the page: the change reverts itself after the chosen time. Default true. */
   timed?: boolean | undefined;
   /**
@@ -239,6 +269,14 @@ export interface GroupOptions {
   order?: number | undefined;
   /** Cards in a grid (the default), or one per row. */
   layout?: "grid" | "list" | undefined;
+  /** This group's grid of cells, over the panel's. */
+  grid?: Partial<GridShape> | undefined;
+}
+
+/** A grid of cells: how many columns at full width, and how tall a row is in CSS pixels. */
+export interface GridShape {
+  columns: number;
+  rowHeight: number;
 }
 
 export interface SharedChartOptions extends Omit<ChartOptions, "in" | "title"> {
@@ -251,6 +289,7 @@ export interface SharedChartOptions extends Omit<ChartOptions, "in" | "title"> {
   /** Position within the group; lower first, ties in order of declaration. */
   order?: number | undefined;
   span?: Span | undefined;
+  size?: CardSize | undefined;
 }
 
 /** What an action is handed when an operator runs it. */
@@ -260,6 +299,8 @@ export interface ActionContext {
   signal: AbortSignal;
   /** The operator's answers to the action's `input`, each already checked against its field. */
   input: Record<string, JsonValue>;
+  /** Why, when the operator said. */
+  reason?: string | undefined;
 }
 
 /** One field an action asks for before it runs, checked like a modifiable value. */
@@ -282,8 +323,15 @@ export interface InputField {
 }
 
 export interface ActionOptions extends CommonOptions {
-  /** The page asks for a second click and names what will happen. Default false. */
-  confirm?: boolean | undefined;
+  /**
+   * The page asks for a second click and names what will happen; `"type"` asks for the action's
+   * label to be typed instead, for something that cannot be taken back. Default false.
+   */
+  confirm?: boolean | "type" | undefined;
+  /** Running it waits for a second operator to approve, with the proposer's input. Implies a required reason. */
+  approval?: boolean | undefined;
+  /** As for values: `"required"` refuses a run without a reason. */
+  reason?: "required" | "optional" | undefined;
   /** Drawn as a destructive button, and implies `confirm`. */
   destructive?: boolean | undefined;
   /** The operator's request is answered with a failure after this long. Default 30 seconds. */
@@ -367,6 +415,9 @@ export interface FeedOptions extends CommonOptions {
 export interface ProfileOptions extends CommonOptions {
   /** The page asks for a second click, naming what will change. Default true. */
   confirm?: boolean | undefined;
+  /** Applying it waits for a second operator to approve. Implies a required reason. */
+  approval?: boolean | undefined;
+  reason?: "required" | "optional" | undefined;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -407,9 +458,12 @@ export interface ValueSchema {
   writable: boolean;
   /** A change waits for a second operator. */
   approval: boolean;
+  /** A change must say why. */
+  reasonRequired?: boolean;
   /** The page may offer a change that reverts itself. */
   timed: boolean;
   span?: Span;
+  size?: CardSize;
 }
 
 export interface ChartSeriesSchema {
@@ -442,6 +496,7 @@ export interface ChartSchema {
   lines?: Array<{ label: string; value?: number; from?: string }>;
   bins?: number;
   span?: Span;
+  size?: CardSize;
 }
 
 export interface InputSchema {
@@ -465,6 +520,13 @@ export interface ActionSchema {
   runnable: boolean;
   input?: InputSchema[];
   span?: Span;
+  size?: CardSize;
+  /** The page asks for the label to be typed before running it. */
+  typeToConfirm?: boolean;
+  /** A run waits for a second operator. */
+  approval?: boolean;
+  /** A run must say why. */
+  reasonRequired?: boolean;
 }
 
 export interface TableSchema {
@@ -478,6 +540,7 @@ export interface TableSchema {
   actions: Array<{ id: string; label: string; confirm: boolean; destructive: boolean }>;
   runnable: boolean;
   span?: Span;
+  size?: CardSize;
 }
 
 export interface FeedSchema {
@@ -488,6 +551,7 @@ export interface FeedSchema {
   capacity: number;
   perSecond: number;
   span?: Span;
+  size?: CardSize;
 }
 
 export interface ProfileSchema {
@@ -500,6 +564,11 @@ export interface ProfileSchema {
   settings: Array<{ value: string; label: string; to?: JsonValue }>;
   writable: boolean;
   span?: Span;
+  size?: CardSize;
+  /** Applying it waits for a second operator. */
+  approval?: boolean;
+  /** Applying it must say why. */
+  reasonRequired?: boolean;
 }
 
 export type ItemSchema = ValueSchema | ChartSchema | ActionSchema | TableSchema | FeedSchema | ProfileSchema;
@@ -509,6 +578,8 @@ export interface GroupSchema {
   title: string;
   description?: string;
   layout: "grid" | "list";
+  /** This group's grid, where it differs from the panel's. */
+  grid?: GridShape;
   items: ItemSchema[];
 }
 
@@ -519,16 +590,34 @@ export interface PanelSchema {
   version: string;
   /** Bumped by anything that changes this shape: a declaration, a regrouping, a retitle. */
   structure: number;
-  theme: { name: string; scheme: "auto" | "light" | "dark" };
+  theme: {
+    name: string;
+    scheme: "auto" | "light" | "dark";
+    /** Themes a viewer may choose among, the panel's first. Absent: the panel's theme only. */
+    offered?: Array<{ name: string; label: string }>;
+  };
+  /** The grid every group is laid out in, unless the group has its own. */
+  grid: GridShape;
+  /** The layout saved for everybody from the page, over the sizes and order in code. */
+  layout?: PanelLayout;
+  /** Whether this viewer may save a layout for everybody. */
+  layoutWritable?: boolean;
   pollMs: number;
   /** Whether anything at all may be edited or run here; each item says whether it may. */
   controls: { edit: boolean; actions: boolean };
   /** Why something declared is not usable here, in sentences the page shows as they are. */
-  restrictions: string[];
+  restrictions: Restriction[];
   groups: GroupSchema[];
-  /** The language of the page's own words, and any of them the application replaced. */
+  /**
+   * The language of the page's own words, or "auto" to follow each viewer's browser, and any of
+   * them the application replaced.
+   */
   locale: string;
   messages?: Record<string, string>;
+  /** The page's words in `locale` when it is not English: the client carries English alone. */
+  translations?: Record<string, string>;
+  /** Every language the page ships, for a viewer to choose from. */
+  locales?: string[];
   /** The listener offers a live stream at `/api/stream`; the page polls without it. */
   stream?: boolean;
 }
@@ -539,8 +628,14 @@ export interface WireValue {
   value: JsonValue;
   /** Set when `value` alone would mislead: `"NaN"`, `"Infinity"`, a truncation note. */
   text?: string;
-  /** The getter or the property read failed; the sentence says how. */
+  /** The page's message key for `text`, when the note is the panel's own words rather than a number. */
+  textKey?: string;
+  textParams?: Record<string, string | number>;
+  /** The getter or the property read failed; the sentence says how, in English. */
   error?: string;
+  /** The page's message key for `error`, and what fills it, so a page says it in the viewer's language. */
+  errorKey?: string;
+  errorParams?: Record<string, string | number>;
   /** A sensitive value: it exists, and this is all the page will learn. */
   masked?: boolean;
   /** When it last changed, epoch milliseconds. For a live value, when it was read. */
@@ -565,10 +660,26 @@ export interface WireValue {
 
 export interface ScheduledChange {
   id: string;
+  /** The next run. */
   at: number;
-  /** Absent when the value is sensitive. */
+  /** Absent when the value is sensitive, and for a profile. */
   to?: JsonValue;
   by: string;
+  reason?: string;
+  /** Runs again by this rule after `at`. */
+  repeat?: RepeatRuleShape;
+  /** Each run reverts itself after this long. */
+  revertAfterMs?: number;
+}
+
+/** Every day, or every week on one weekday, at a wall-clock time in a time zone. */
+export interface RepeatRuleShape {
+  every: "day" | "week";
+  /** "HH:MM", 24-hour. */
+  at: string;
+  /** 0 is Sunday. */
+  weekday?: number;
+  timeZone: string;
 }
 
 /**
@@ -597,6 +708,8 @@ export interface PanelState {
   /** Operator changes to mark on each chart, within the chart's window. */
   marks: Record<string, Array<{ at: number; text: string }>>;
   /** Actions hidden or disabled right now, by id; an action absent here is shown and usable. */
+  /** Changes scheduled for profiles, by profile id. */
+  profileSchedules?: Record<string, ScheduledChange[]>;
   actionStates: Record<string, { hidden?: boolean; disabled?: string }>;
 }
 
@@ -606,8 +719,11 @@ export interface SettingDiff {
   label: string;
   from: JsonValue;
   to: JsonValue;
-  /** Why this setting would be refused; a diff with any error applies nothing. */
+  /** Why this setting would be refused, in English; a diff with any error applies nothing. */
   error?: string;
+  /** The page's message key for `error`, and what fills it, so a page says it in the viewer's language. */
+  errorKey?: string;
+  errorParams?: Record<string, string | number>;
 }
 
 export interface FeedEntry {
@@ -620,13 +736,19 @@ export interface FeedEntry {
 
 export interface PendingChange {
   id: string;
+  /** What is proposed: a value's change (the default), an action's run, or a profile's application. */
+  kind?: "value" | "action" | "profile";
   target: string;
   label: string;
-  /** Absent when the value is sensitive. */
+  /** Absent when the value is sensitive; an action's input. */
   to?: JsonValue;
   by: string;
   at: number;
   expiresAt: number;
+  /** Why, in the proposer's words. */
+  reason?: string;
+  /** Approving it schedules it for this time rather than applying it. */
+  applyAt?: number;
 }
 
 export interface TableRowsAnswer {
@@ -639,7 +761,7 @@ export interface TableRowsAnswer {
 export interface ChangeRecord {
   /** Increasing within a process, and across restarts when a change log store keeps them. */
   id: number;
-  kind: "edit" | "action" | "profile" | "revert" | "approval" | "scheduled" | "import";
+  kind: "edit" | "action" | "profile" | "revert" | "approval" | "scheduled" | "import" | "layout";
   /** The value, action, profile or pending change id. */
   target: string;
   label: string;
@@ -655,15 +777,35 @@ export interface ChangeRecord {
   revertible?: boolean;
   /** The process the change was made on, when changes travel between replicas. */
   origin?: string;
+  /** Why, in the words of whoever made it. */
+  reason?: string;
   /** SHA-256 of this record and the previous one's hash: a chain a deleted or edited line breaks. */
   hash?: string;
   prevHash?: string;
+}
+
+/**
+ * A sentence the page shows about what a listener does not allow: English, as every caller has
+ * always been sent it, and the key that says it in the viewer's language.
+ */
+export interface Restriction {
+  text: string;
+  key: string;
+  params?: Record<string, string | number>;
 }
 
 export interface Notice {
   /** Stable, so the same condition noticed twice is one notice. */
   id: string;
   level: "info" | "warning";
+  /** In English, as every caller of the API has always been sent it. */
   message: string;
+  /**
+   * The page's message key for `message`, and what fills it, when the panel wrote the notice about
+   * its own machinery. Absent for words the panel did not write itself — an alert's sentence, which
+   * reads the same here, in the change log and in a webhook.
+   */
+  key?: string;
+  params?: Record<string, string | number>;
   at: number;
 }

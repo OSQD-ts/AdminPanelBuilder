@@ -16,6 +16,8 @@ Under the listener's base path, which the router accepts with or without the pre
 | `GET /client-extras.js` | the chart and table code | loaded only by pages that draw charts or tables |
 | `GET /api/openapi.json` | this API as OpenAPI 3.1 | the same auth as everything else |
 | `GET /api/settings` | `{ settings }` | every modifiable value this caller sees, by id; sensitive values left out |
+| `GET /api/messages/:code` | `{ messages }` | the page's words in a shipped language, for a viewer who chose it |
+| `GET /healthz` | `ok` or `ok, N warnings` | without authentication; only with `health: true` |
 | `GET /api/schema` | `{ schema }` | [`PanelSchema`](data-shapes.md#panelschema) |
 | `GET /api/state?since=&after=&feed=` | `{ state }` | [`PanelState`](data-shapes.md#panelstate); `since` a version, `after` epoch ms, `feed` a feed sequence |
 | `GET /api/stream?since=&after=&feed=` | server-sent events | `event: state` frames of `PanelState`, each with an `id` a reconnecting `EventSource` sends back as `Last-Event-ID` to resume from there; `event: thinned` when frames were skipped; 503 past `maxViewers`, 404 with `stream: false` |
@@ -23,14 +25,15 @@ Under the listener's base path, which the router accepts with or without the pre
 | `GET /metrics` | Prometheus text | only with `metrics`; see [metrics](../operations/metrics.md) |
 | `GET /api/changes` | `{ changes }` | the newest 200 [`ChangeRecord`](data-shapes.md#changerecord)s |
 | `GET /api/notices` | `{ notices }` | [`Notice`](data-shapes.md#notice)s |
-| `POST /api/values/:id` | `{ value }`, or 202 `{ pending }` | body `{ "value": …, "revertAfterMs"?: …, "at"?: … }`; `at` (epoch ms or ISO 8601) schedules it and the answer lists it in `value.scheduled`; needs `controls.edit` for the value's group |
+| `POST /api/values/:id` | `{ value }`, or 202 `{ pending }` | body `{ "value": …, "revertAfterMs"?: …, "at"?: …, "repeat"?: { every, at, weekday?, timeZone }, "reason"?: … }`; `at` (epoch ms or ISO 8601) schedules it and the answer lists it in `value.scheduled`; needs `controls.edit` for the value's group |
 | `POST /api/schedules/:id/cancel` | `{ value }` | body `{}`; cancels a scheduled change |
 | `POST /api/settings/diff` | `{ diff, unknown }` | body `{ "settings": { … } }`; changes nothing |
 | `POST /api/settings/apply` | `{ changed }` | body `{ "settings": { … } }`; one change, whole or not at all; needs `controls.edit` |
-| `POST /api/actions/:id` | `{ result: { message } }` | body `{ "input"?: { … } }`; needs `controls.actions` |
+| `POST /api/layout` | `{ layout }` | body `{ "layout": { "<group id>": { "order": [card ids], "sizes": { "<card id>": { "w", "h" } } } } }`, or `null` for the layout in code; the layout every viewer gets. Groups the caller may not edit keep theirs. Recorded as a `layout` change; needs `controls.edit` |
+| `POST /api/actions/:id` | `{ result: { message } }`, or 202 `{ pending }` | body `{ "input"?: { … }, "reason"?: … }`; needs `controls.actions` |
 | `POST /api/tables/:id/actions/:action` | `{ result: { message } }` | body `{ "row": "<id>" }`; needs `controls.actions` |
-| `POST /api/profiles/:id` | `{ value }` | body `{}`; needs `controls.edit` for every value it sets |
-| `POST /api/pending/:id/approve` · `/reject` | `{ value }` | body `{}`; the proposer cannot approve |
+| `POST /api/profiles/:id` | `{ value }`, or 202 `{ pending }` | body `{ "revertAfterMs"?, "at"?, "repeat"?, "reason"? }`; needs `controls.edit` for every value it sets |
+| `POST /api/pending/:id/approve` · `/reject` | `{ value }`, or `{ result }` for an action | body `{ "reason"? }` to reject; the proposer cannot approve |
 | `POST /api/changes/:id/undo` | `{ value }` or 202 `{ pending }` | body `{}`; 409 when the value has changed since |
 | `GET <basePath>/auth/login` · `/auth/callback` · `/auth/logout` | redirects | only with `auth: { oidc }` |
 
@@ -40,7 +43,8 @@ Every JSON body is an object with one named key; every failure is `{ "error": "<
 value's constraint refusal also carries `key` and `params` (`{ "key": "refuseAtMost", "params": {
 "label": "Limit", "max": 100 } }`), which the page uses to say it in its own language; the sentence is
 always English. The document at `/api/openapi.json` describes every route, and a test checks it lists
-every route the router answers.
+every route the router answers; `/healthz` and `/metrics` are in it on a listener that switched them
+on, and absent on one that did not.
 
 ## Status codes
 

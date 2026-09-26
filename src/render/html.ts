@@ -9,7 +9,7 @@
  * in the source — including one inside a string literal a player chose as their name.
  */
 import { CLIENT_EXTRAS, CLIENT_SCRIPT } from "../client.generated.js";
-import { themeStylesheet } from "../themes/define.js";
+import { scopedThemeStylesheet, themeStylesheet } from "../themes/define.js";
 import type { Theme } from "../themes/types.js";
 import type { PanelSchema, PanelState } from "../types.js";
 import { LAYOUT_CSS } from "./layout.js";
@@ -24,9 +24,13 @@ export function usesExtras(schema: PanelSchema): boolean {
   return schema.groups.some((group) => group.items.some((item) => item.type === "chart" || item.type === "table"));
 }
 
-/** Theme preamble, layout, then the theme's own additions, so they win ties. */
-export function panelStylesheet(theme: Theme): string {
-  return `${themeStylesheet(theme)}${LAYOUT_CSS}\n${theme.css}`;
+/**
+ * Theme preamble, the other themes a viewer may choose (scoped to `data-theme`), layout, then the
+ * theme's own additions, so they win ties.
+ */
+export function panelStylesheet(theme: Theme, offered: readonly Theme[] = []): string {
+  const others = offered.filter((other) => other.name !== theme.name).map(scopedThemeStylesheet).join("");
+  return `${themeStylesheet(theme)}${others}${LAYOUT_CSS}\n${theme.css}`;
 }
 
 export function escapeHtml(text: string): string {
@@ -59,6 +63,8 @@ function rootElement(bootstrap: Bootstrap | undefined, theme: Theme, scheme: "au
 export interface PageOptions {
   bootstrap: Bootstrap;
   theme: Theme;
+  /** Themes a viewer may switch to, carried in the one stylesheet. */
+  themes?: readonly Theme[] | undefined;
   /** The CSP nonce for the one `<style>` and the one `<script>`. */
   nonce: string;
   /** The path the page's API calls go to: the listener's base path. */
@@ -67,7 +73,7 @@ export interface PageOptions {
 
 /** The standalone page a listener serves at its base path. */
 export function renderPage(options: PageOptions): string {
-  const { bootstrap, theme, nonce, api } = options;
+  const { bootstrap, theme, nonce, api, themes } = options;
   const title = escapeHtml(bootstrap.schema.title + (bootstrap.schema.instance === undefined ? "" : ` · ${bootstrap.schema.instance}`));
   return [
     "<!doctype html>",
@@ -77,7 +83,7 @@ export function renderPage(options: PageOptions): string {
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="referrer" content="no-referrer">',
     `<title>${title}</title>`,
-    `<style nonce="${nonce}">body { margin: 0; }\n${panelStylesheet(theme)}</style>`,
+    `<style nonce="${nonce}">body { margin: 0; }\n${panelStylesheet(theme, themes)}</style>`,
     "</head>",
     "<body>",
     rootElement(bootstrap, theme, bootstrap.schema.theme.scheme, api, true),
@@ -138,7 +144,7 @@ export function clientScript(options: { api?: string | undefined; nonce?: string
 export function renderFragment(
   snapshot: Bootstrap | undefined,
   theme: Theme,
-  options: { api: string | undefined; scheme: "auto" | "light" | "dark"; title: string; nonce: string | undefined; document: boolean; script?: boolean; group?: string | undefined; compact?: boolean },
+  options: { api: string | undefined; scheme: "auto" | "light" | "dark"; title: string; nonce: string | undefined; document: boolean; script?: boolean; group?: string | undefined; compact?: boolean; themes?: readonly Theme[] },
 ): string {
   const nonce = options.nonce === undefined ? "" : ` nonce="${escapeHtml(options.nonce)}"`;
   const only = { group: options.group, compact: options.compact };
@@ -149,7 +155,7 @@ export function renderFragment(
     body = [`<link rel="stylesheet" href="${escapeHtml(api)}/panel.css">`, rootElement(undefined, theme, options.scheme, api, options.document, only), script ? clientScript({ api }) : ""].filter((part) => part !== "").join("\n");
   } else {
     const extras = snapshot === undefined || usesExtras(snapshot.schema);
-    body = [`<style${nonce}>${panelStylesheet(theme)}</style>`, rootElement(snapshot, theme, options.scheme, undefined, options.document, only), script ? clientScript({ nonce: options.nonce, extras }) : ""].filter((part) => part !== "").join("\n");
+    body = [`<style${nonce}>${panelStylesheet(theme, options.themes)}</style>`, rootElement(snapshot, theme, options.scheme, undefined, options.document, only), script ? clientScript({ nonce: options.nonce, extras }) : ""].filter((part) => part !== "").join("\n");
   }
   if (!options.document) return body;
   return ["<!doctype html>", '<html lang="en">', "<head>", '<meta charset="utf-8">', '<meta name="viewport" content="width=device-width, initial-scale=1">', `<title>${escapeHtml(options.title)}</title>`, `<style${nonce}>body { margin: 0; }</style>`, "</head>", "<body>", body, "</body>", "</html>"].join("\n");

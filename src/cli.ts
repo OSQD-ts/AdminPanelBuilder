@@ -4,7 +4,7 @@
  * (`@osqd/admin-panel-builder/client`), which scripts can use directly.
  *
  *   apb get <url> [id]                  every value, or one
- *   apb set <url> <id> <json> [--for 1h] [--at 2026-10-01T09:00:00Z]
+ *   apb set <url> <id> <json> [--for 1h] [--at 2026-10-01T09:00:00Z | --repeat "daily 02:00"] [--reason "…"]
  *   apb cancel <url> <scheduled-id>
  *   apb run <url> <action> [--input name=value ...]
  *   apb changes <url>
@@ -18,9 +18,10 @@
  *
  * The token comes from `--token` or `PANEL_TOKEN`. stdout is the artifact: the value, the JSON, a
  * table a script can read. stderr is the conversation. `--json` prints the API's own answer. Exit
- * codes: 0 success, 1 the panel refused or failed, 2 bad arguments or an unreachable panel.
+ * codes: 0 success, 1 the panel refused or failed (or the command is not one of these), 2 bad
+ * arguments or an unreachable panel.
  */
-import { verifyChain } from "./change-log.js";
+import { rotatedFiles, verifyChain } from "./change-log.js";
 import { PanelApiError, panelClient } from "./sdk.js";
 import type { ChangeRecord, JsonValue, WireValue } from "./types.js";
 import { VERSION } from "./version.js";
@@ -42,18 +43,21 @@ const USAGE = `apb ${VERSION} — read and change a running admin panel
 
 Usage:
   apb get <url> [id]                        print every value, or one
-  apb set <url> <id> <json> [--for <time>] [--at <when>]
+  apb set <url> <id> <json> [--for <time>] [--at <when> | --repeat <rule>]
                                             change a value; --for reverts it after 30s, 10m, 2h, 1d;
-                                            --at waits until an ISO 8601 time
+                                            --at waits until an ISO 8601 time; --repeat runs it
+                                            "daily 02:00" or "weekly mon 09:30" (--tz, default UTC)
   apb cancel <url> <scheduled-id>           cancel a scheduled change
-  apb run <url> <action> [--input k=v]...   run an action
-  apb apply <url> <profile>                 apply a profile
+  apb run <url> <action> [--input k=v]...   run an action (proposed, if it needs approval)
+  apb apply <url> <profile> [--for|--at|--repeat]
+                                            apply a profile, now, for a while or later
   apb changes <url>                         the recent change history
   apb watch <url> [id]... [--interval <time>] [--count <n>]
                                             print values as they change
   apb export <url>                          every setting you may see, as JSON
   apb import <url> <file> [--dry-run]       apply exported settings, whole or not at all
-  apb verify-log <file>                     check a JSON-lines change log's hash chain
+  apb verify-log <file>                     check a JSON-lines change log's hash chain, across
+                                            the files it rotated to as well
   apb config [file]                         the listener configuration as it resolves from the
                                             file (or APB_CONFIG, or ./admin-panel.toml) and the
                                             environment, credentials redacted
@@ -61,6 +65,7 @@ Usage:
 
 Options:
   --token <token>   the panel's token (default: PANEL_TOKEN)
+  --reason <text>   why: recorded with the change, required where the panel says so
   --json            print the API's answer as JSON
   -h, --help        this text
   -v, --version     the version
@@ -109,10 +114,18 @@ export async function main(argv: readonly string[], io: CliIo = defaultIo()): Pr
       io.err("apb: verify-log needs the change log file");
       return 2;
     }
-    return verifyLog(io, await read(url).catch((error: unknown) => {
-      io.err(`apb: ${url} could not be read: ${(error as Error).message}`);
-      return undefined;
-    }), parsed.json);
+    // Rotated files first, oldest to newest, then the file itself: one chain across all of them.
+    const files = [...(await rotatedFiles(url)), url, ...rest];
+    const texts: Array<{ file: string; text: string }> = [];
+    for (const file of files) {
+      const text = await read(file).catch((error: unknown) => {
+        io.err(`apb: ${file} could not be read: ${(error as Error).message}`);
+        return undefined;
+      });
+      if (text === undefined) return 2;
+      texts.push({ file, text });
+    }
+    return verifyLog(io, texts, parsed.json);
   }
   if (url === undefined || !/^https?:\/\//.test(url)) {
     io.err("apb: the second argument is the panel's URL, starting with http:// or https://");
@@ -150,15 +163,15 @@ export async function main(argv: readonly string[], io: CliIo = defaultIo()): Pr
       case "set": {
         const [id, raw] = rest;
         if (id === undefined || raw === undefined) throw new UsageError("set needs an id and a value");
-        const answer = await panel.set(id, bare(raw), { revertAfterMs: parsed.for, at: parsed.at });
+        const answer = await panel.set(id, bare(raw), { revertAfterMs: parsed.for, at: parsed.at, repeat: parsed.repeat, reason: parsed.reason });
         if ("pending" in answer) {
           io.err(`apb: proposed; ${id} changes once another operator approves it`);
           if (parsed.json) io.out(JSON.stringify(answer, null, 2));
           return 0;
         }
-        if (parsed.at !== undefined) {
+        if (parsed.at !== undefined || parsed.repeat !== undefined) {
           const entry = answer.value.scheduled?.at(-1);
-          io.err(`apb: scheduled for ${parsed.at}${entry === undefined ? "" : `; cancel with apb cancel ${url} ${entry.id}`}`);
+          io.err(`apb: scheduled ${parsed.at === undefined ? `to repeat, first at ${entry === undefined ? "?" : new Date(entry.at).toISOString()}` : `for ${parsed.at}`}${entry === undefined ? "" : `; cancel with apb cancel ${url} ${entry.id}`}`);
           if (parsed.json) io.out(JSON.stringify(answer, null, 2));
           return 0;
         }
@@ -175,15 +188,15 @@ export async function main(argv: readonly string[], io: CliIo = defaultIo()): Pr
       case "run": {
         const [action] = rest;
         if (action === undefined) throw new UsageError("run needs an action id");
-        const message = await panel.run(action, parsed.input);
+        const message = await panel.run(action, parsed.input, { reason: parsed.reason });
         io.out(parsed.json ? JSON.stringify({ result: { message } }, null, 2) : message);
         return 0;
       }
       case "apply": {
         const [profile] = rest;
         if (profile === undefined) throw new UsageError("apply needs a profile id");
-        await panel.applyProfile(profile);
-        io.err(`apb: applied ${profile}`);
+        const answer = await panel.applyProfile(profile, { revertAfterMs: parsed.for, at: parsed.at, repeat: parsed.repeat, reason: parsed.reason });
+        io.err("pending" in answer ? `apb: proposed; ${profile} applies once another operator approves it` : parsed.at !== undefined || parsed.repeat !== undefined ? `apb: scheduled ${profile}` : `apb: applied ${profile}`);
         return 0;
       }
       case "changes": {
@@ -235,7 +248,7 @@ export async function main(argv: readonly string[], io: CliIo = defaultIo()): Pr
         if (diff.length === 0 && unknown.length === 0) io.err("apb: nothing would change");
         if (parsed.json) io.out(JSON.stringify({ diff, unknown }, null, 2));
         if (parsed.dryRun) return unknown.length > 0 || diff.some((line) => line.error !== undefined) ? 1 : 0;
-        const changed = await panel.importSettings(settings);
+        const changed = await panel.importSettings(settings, { reason: parsed.reason });
         io.err(`apb: imported ${changed} setting${changed === 1 ? "" : "s"}`);
         return 0;
       }
@@ -275,35 +288,48 @@ function bare(raw: string): JsonValue {
   }
 }
 
-async function verifyLog(io: CliIo, text: string | undefined, json: boolean): Promise<number> {
-  if (text === undefined) return 2;
+async function verifyLog(io: CliIo, files: ReadonlyArray<{ file: string; text: string }>, json: boolean): Promise<number> {
   const records: ChangeRecord[] = [];
-  const lines = text.split("\n");
-  for (const [index, line] of lines.entries()) {
-    if (line.trim() === "") continue;
-    try {
-      records.push(JSON.parse(line) as ChangeRecord);
-    } catch {
-      // A torn last line is a crash mid-write; anywhere else it is damage.
-      if (index < lines.length - 1 && lines.slice(index + 1).some((rest) => rest.trim() !== "")) {
-        io.err(`apb: line ${index + 1} is not JSON, so the log was damaged there`);
-        return 1;
+  /** Where each record came from, for saying so. */
+  const origins: Array<{ file: string; line: number; first: boolean }> = [];
+  for (const { file, text } of files) {
+    const lines = text.split("\n");
+    let first = true;
+    for (const [index, line] of lines.entries()) {
+      if (line.trim() === "") continue;
+      try {
+        records.push(JSON.parse(line) as ChangeRecord);
+        origins.push({ file, line: index + 1, first });
+        first = false;
+      } catch {
+        // A torn last line is a crash mid-write; anywhere else it is damage.
+        if (index < lines.length - 1 && lines.slice(index + 1).some((rest) => rest.trim() !== "")) {
+          io.err(`apb: ${file} line ${index + 1} is not JSON, so the log was damaged there`);
+          return 1;
+        }
       }
     }
   }
   const result = await verifyChain(records);
   if (json) io.out(JSON.stringify(result));
+  const many = files.length > 1;
   if (result.ok) {
-    io.err(`apb: the chain holds over ${result.checked} record${result.checked === 1 ? "" : "s"}${result.checked < records.length ? ` (${records.length - result.checked} older records carry no hash)` : ""}`);
+    io.err(`apb: the chain holds over ${result.checked} record${result.checked === 1 ? "" : "s"}${many ? ` in ${files.length} files` : ""}${result.checked < records.length ? ` (${records.length - result.checked} older records carry no hash)` : ""}`);
     return 0;
   }
-  io.err(`apb: record ${result.id} (line ${result.at + 1}) breaks the chain: ${result.reason}`);
+  const where = origins[result.at] as { file: string; line: number; first: boolean };
+  const previous = result.at > 0 ? origins[result.at - 1] : undefined;
+  if (where.first && previous !== undefined && previous.file !== where.file && /does not follow/.test(result.reason)) {
+    io.err(`apb: a gap between ${previous.file} and ${where.file}: records are missing there, so a rotated file may have been deleted or moved`);
+    return 1;
+  }
+  io.err(`apb: record ${result.id} (${many ? `${where.file} ` : ""}line ${where.line}) breaks the chain: ${result.reason}`);
   return 1;
 }
 
 function completion(io: CliIo, shell: string | undefined): number {
   const words = COMMANDS.join(" ");
-  const flags = "--token --json --for --at --input --interval --count --dry-run --help --version";
+  const flags = "--token --json --for --at --repeat --tz --reason --input --interval --count --dry-run --help --version";
   switch (shell) {
     case "bash":
       io.out(`_apb() {\n  local current=\${COMP_WORDS[COMP_CWORD]}\n  if [ "$COMP_CWORD" -eq 1 ]; then COMPREPLY=($(compgen -W "${words}" -- "$current"));\n  else COMPREPLY=($(compgen -W "${flags}" -- "$current")); fi\n}\ncomplete -o default -F _apb apb`);
@@ -331,6 +357,10 @@ function parse(argv: readonly string[]) {
     dryRun: false,
     for: undefined as number | undefined,
     at: undefined as string | undefined,
+    repeat: undefined as { every: "day" | "week"; at: string; weekday?: number; timeZone: string } | undefined,
+    repeatText: undefined as string | undefined,
+    tz: "UTC",
+    reason: undefined as string | undefined,
     interval: undefined as number | undefined,
     count: undefined as number | undefined,
     input: undefined as Record<string, unknown> | undefined,
@@ -368,6 +398,15 @@ function parse(argv: readonly string[]) {
       case "--interval":
         out.interval = duration(value(), "--interval");
         break;
+      case "--reason":
+        out.reason = value();
+        break;
+      case "--repeat":
+        out.repeatText = value();
+        break;
+      case "--tz":
+        out.tz = value();
+        break;
       case "--dry-run":
         out.dryRun = true;
         break;
@@ -401,7 +440,19 @@ function parse(argv: readonly string[]) {
         throw new UsageError(`unknown option ${flag}`);
     }
   }
+  if (out.repeatText !== undefined) out.repeat = repeatRule(out.repeatText, out.tz);
+  if (out.repeat !== undefined && out.at !== undefined) throw new UsageError("--at and --repeat say two different things; give one");
   return out;
+}
+
+/** "daily 02:00" or "weekly mon 09:30", in `tz`. */
+export function repeatRule(text: string, timeZone: string): { every: "day" | "week"; at: string; weekday?: number; timeZone: string } {
+  const days = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  const daily = /^daily ([01]\d|2[0-3]):([0-5]\d)$/.exec(text.trim());
+  if (daily !== null) return { every: "day", at: `${daily[1]}:${daily[2]}`, timeZone };
+  const weekly = /^weekly (sun|mon|tue|wed|thu|fri|sat) ([01]\d|2[0-3]):([0-5]\d)$/i.exec(text.trim());
+  if (weekly !== null) return { every: "week", weekday: days.indexOf((weekly[1] as string).toLowerCase()), at: `${weekly[2]}:${weekly[3]}`, timeZone };
+  throw new UsageError(`--repeat takes "daily HH:MM" or "weekly mon HH:MM" (got ${JSON.stringify(text)})`);
 }
 
 /** `30s`, `10m`, `2h`, `1d`. Anything else is refused rather than read as zero. */

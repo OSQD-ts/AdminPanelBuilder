@@ -14,6 +14,9 @@
  */
 import type { AdminPanel, PanelScope } from "./core.js";
 
+/** Every kind of change record, so each series exists from the first scrape. */
+export const CHANGE_KINDS = ["edit", "action", "profile", "revert", "approval", "scheduled", "import", "layout"] as const;
+
 export function renderMetrics(panel: AdminPanel, scope: PanelScope, prefix: string): string {
   const gauges: string[] = [];
   const counters: string[] = [];
@@ -25,7 +28,7 @@ export function renderMetrics(panel: AdminPanel, scope: PanelScope, prefix: stri
   lines.push(`# HELP ${prefix}_value Numeric values shown on the admin panel.`, `# TYPE ${prefix}_value gauge`, ...gauges);
   lines.push(`# HELP ${prefix}_count_total Counters declared with counter() on the admin panel.`, `# TYPE ${prefix}_count_total counter`, ...counters);
   const tally = new Map<string, number>();
-  for (const kind of ["edit", "action", "profile", "revert", "approval"]) for (const ok of ["true", "false"]) tally.set(`${kind}|${ok}`, 0);
+  for (const kind of CHANGE_KINDS) for (const ok of ["true", "false"]) tally.set(`${kind}|${ok}`, 0);
   for (const [key, count] of panel.changeTotals()) tally.set(key, count);
   lines.push(`# HELP ${prefix}_changes_total Operator changes since the process started, by kind and whether they succeeded.`, `# TYPE ${prefix}_changes_total counter`);
   for (const [key, count] of tally) {

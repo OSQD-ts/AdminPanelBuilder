@@ -17,7 +17,7 @@ export default defineConfig({
         // The browser half needs a document. Its pure modules (format, geometry) are
         // unit-tested and stay counted; the rest is measured by `npm run test:browser`.
         "src/element/**",
-        "src/client/{dom,api,app,render,editors,charts,changes,boot,blocks,cards,activity,palette,announce,table,extras,registry,view-deps}.ts",
+        "src/client/{dom,api,app,render,editors,charts,changes,boot,blocks,cards,activity,palette,announce,table,extras,registry,view-deps,when,grid,arrange,settings}.ts",
         // Three lines that run the command line in a process; tests/cli-process.test.ts runs it there.
         "src/apb.ts",
       ],

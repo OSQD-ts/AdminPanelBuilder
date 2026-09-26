@@ -15,6 +15,7 @@
  */
 import { AdminPanelConfigError } from "../errors.js";
 import { rejectUnknown } from "../internal/options.js";
+import { type RefusalKey, refusalBody } from "../i18n/refuse.js";
 import { escapeHtml } from "../render/html.js";
 import { panelClient } from "../sdk.js";
 import { createAuthenticator } from "../server/auth.js";
@@ -22,6 +23,7 @@ import type { PanelAuth } from "../server/types.js";
 import { themeStylesheet } from "../themes/define.js";
 import { resolveTheme } from "../themes/index.js";
 import type { Theme } from "../themes/types.js";
+import type { JsonValue } from "../types.js";
 import type { NodeLikeRequest, NodeLikeResponse } from "./node.js";
 
 export interface FleetPanel {
@@ -43,7 +45,20 @@ export interface FleetOptions {
   theme?: Theme | string | undefined;
   /** How long one panel may take to answer before it is shown as unreachable. Default 3 seconds. */
   timeoutMs?: number | undefined;
+  /** Reload the page every so many seconds, without a script. Default: never; at least 5. */
+  refreshSeconds?: number | undefined;
+  /** Compare every reachable panel's settings and list those that differ. Default true. */
+  drift?: boolean | undefined;
   fetch?: typeof fetch | undefined;
+  /** For tests. */
+  now?: (() => number) | undefined;
+}
+
+/** A setting whose value is not the same on every reachable panel. */
+export interface FleetDrift {
+  id: string;
+  /** Each panel's value by panel name; a panel that does not have the setting is absent. */
+  values: Record<string, JsonValue>;
 }
 
 /** What the page shows of one panel. */
@@ -59,11 +74,15 @@ export interface FleetEntry {
   warnings?: number | undefined;
   /** How long it took to answer, in milliseconds. */
   tookMs?: number | undefined;
+  /** When it last started answering, or stopped: what this page has seen since it started. */
+  since?: number | undefined;
 }
 
 export interface Fleet {
   /** Asks every panel now, in parallel. Never rejects: an unreachable panel is an entry that says so. */
   status(): Promise<FleetEntry[]>;
+  /** The panels' state and the settings that differ between them. */
+  survey(): Promise<{ panels: FleetEntry[]; drift: FleetDrift[] }>;
   /** Node middleware serving the page at its root and the entries as JSON at `/api/fleet`. */
   handler(): (request: NodeLikeRequest, response: NodeLikeResponse) => void;
   /** The same, as `(Request) => Promise<Response>`. */
@@ -76,7 +95,8 @@ export const MAX_FLEET_PANELS = 100;
 const SECURITY_HEADERS: Record<string, string> = { "cache-control": "no-store, max-age=0", "x-content-type-options": "nosniff", "x-frame-options": "DENY", "referrer-policy": "no-referrer" };
 
 export function createFleet(options: FleetOptions): Fleet {
-  rejectUnknown(options, ["panels", "auth", "title", "theme", "timeoutMs", "fetch"], "createFleet()");
+  rejectUnknown(options, ["panels", "auth", "title", "theme", "timeoutMs", "refreshSeconds", "drift", "fetch", "now"], "createFleet()");
+  if (options.refreshSeconds !== undefined && (!Number.isInteger(options.refreshSeconds) || options.refreshSeconds < 5)) throw new AdminPanelConfigError("createFleet(): refreshSeconds is a whole number of seconds, at least 5");
   if (options.auth === undefined) throw new AdminPanelConfigError("createFleet(): auth is required: the page holds a token for every panel it lists");
   if (!Array.isArray(options.panels) || options.panels.length === 0) throw new AdminPanelConfigError("createFleet(): panels is empty, which would list nothing");
   if (options.panels.length > MAX_FLEET_PANELS) throw new AdminPanelConfigError(`createFleet(): ${options.panels.length} panels is more than ${MAX_FLEET_PANELS}; each is asked on every page view`);
@@ -92,45 +112,73 @@ export function createFleet(options: FleetOptions): Fleet {
   const theme = resolveTheme(options.theme);
   const title = options.title ?? "Fleet";
   const timeoutMs = options.timeoutMs ?? 3000;
+  const now = options.now ?? (() => Date.now());
+  /** Whether each panel answered last time, and since when: the page's memory. */
+  const seen = new Map<string, { reachable: boolean; since: number }>();
 
-  const status = (): Promise<FleetEntry[]> =>
+  const ask = async (withSettings: boolean): Promise<Array<{ entry: FleetEntry; settings: Record<string, JsonValue> | undefined }>> =>
     Promise.all(
-      options.panels.map(async (panel): Promise<FleetEntry> => {
+      options.panels.map(async (panel) => {
         const entry: FleetEntry = { name: panel.name, link: panel.link ?? panel.url, reachable: false };
         const client = panelClient({ url: panel.url, token: panel.token, timeoutMs, fetch: options.fetch });
         const started = Date.now();
+        let settings: Record<string, JsonValue> | undefined;
         try {
-          const [schema, notices] = await Promise.all([client.schema(), client.notices()]);
+          const [schema, notices, read] = await Promise.all([client.schema(), client.notices(), withSettings ? client.settings().catch(() => undefined) : Promise.resolve(undefined)]);
+          settings = read;
           Object.assign(entry, { reachable: true, title: schema.title, instance: schema.instance, version: schema.version, warnings: notices.filter((notice) => notice.level === "warning").length, tookMs: Date.now() - started });
         } catch (error) {
           entry.problem = error instanceof Error ? error.message : String(error);
         }
-        return entry;
+        const before = seen.get(panel.name);
+        const since = before !== undefined && before.reachable === entry.reachable ? before.since : now();
+        seen.set(panel.name, { reachable: entry.reachable, since });
+        // A first sight is not a change: say "since" only once the page has seen it before.
+        if (before !== undefined) entry.since = since;
+        return { entry, settings };
       }),
     );
+  const status = async (): Promise<FleetEntry[]> => (await ask(false)).map(({ entry }) => entry);
+  const survey = async (): Promise<{ panels: FleetEntry[]; drift: FleetDrift[] }> => {
+    const answers = await ask(options.drift !== false);
+    return { panels: answers.map(({ entry }) => entry), drift: driftOf(answers.filter(({ settings }) => settings !== undefined).map(({ entry, settings }) => [entry.name, settings as Record<string, JsonValue>] as const)) };
+  };
+
+  /** Refused the way every panel route refuses: the sentence, the kind, and the key that translates it. */
+  const refuse = (status: number, key: RefusalKey, params: Record<string, string | number> = {}): { status: number; headers: Record<string, string>; body: string } => ({
+    status,
+    headers: { ...SECURITY_HEADERS, "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify(refusalBody(status, key, params)),
+  });
 
   /** Answers one request, whatever the front end. */
   const answer = async (method: string, path: string, headers: Record<string, string | undefined>, address: string): Promise<{ status: number; headers: Record<string, string>; body: string }> => {
     const result = await authenticator.authenticate({ method, path, headers, address });
     if (!result.ok) {
-      const refused: { status: number; headers: Record<string, string>; body: string } = { status: 401, headers: { ...SECURITY_HEADERS, "content-type": "application/json; charset=utf-8" }, body: JSON.stringify({ error: "sign in to see this page" }) };
+      const refused = refuse(401, "refuseSignIn");
       if (result.challenge !== undefined) refused.headers = { ...refused.headers, "www-authenticate": result.challenge };
       return refused;
     }
-    if (method !== "GET" && method !== "HEAD") return { status: 405, headers: { ...SECURITY_HEADERS, allow: "GET" }, body: "" };
-    const entries = await status();
-    if (path === "/api/fleet") return { status: 200, headers: { ...SECURITY_HEADERS, "content-type": "application/json; charset=utf-8" }, body: JSON.stringify({ panels: entries }) };
-    if (path !== "/" && path !== "") return { status: 404, headers: { ...SECURITY_HEADERS, "content-type": "application/json; charset=utf-8" }, body: JSON.stringify({ error: `there is nothing at ${path}` }) };
+    if (method !== "GET" && method !== "HEAD") {
+      const refused = refuse(405, "refuseMethod", { method });
+      refused.headers = { ...refused.headers, allow: "GET" };
+      return refused;
+    }
+    const { panels: entries, drift } = await survey();
+    if (path === "/api/fleet") return { status: 200, headers: { ...SECURITY_HEADERS, "content-type": "application/json; charset=utf-8" }, body: JSON.stringify({ panels: entries, drift }) };
+    // Everything else under the mount is the page: a handler mounted under a prefix it is not told
+    // cannot tell that prefix from a path within it, so both front ends ask for the page by name.
     const nonce = btoa(String.fromCharCode(...globalThis.crypto.getRandomValues(new Uint8Array(18))));
     return {
       status: 200,
       headers: { ...SECURITY_HEADERS, "content-type": "text/html; charset=utf-8", "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` },
-      body: renderFleet(title, theme, entries, nonce),
+      body: renderFleet(title, theme, entries, drift, nonce, options.refreshSeconds, now()),
     };
   };
 
   return {
     status,
+    survey,
     handler: () => (request, response) => {
       const path = ((request.originalUrl ?? request.url ?? "/").split("?")[0] as string).replace(/\/+$/, "");
       const headers: Record<string, string | undefined> = {};
@@ -158,11 +206,38 @@ export function fleetHandler(options: FleetOptions): (request: NodeLikeRequest, 
   return createFleet(options).handler();
 }
 
-function renderFleet(title: string, theme: Theme, entries: readonly FleetEntry[], nonce: string): string {
+/** Settings whose value is not the same everywhere they exist, in a stable order. */
+function driftOf(panels: ReadonlyArray<readonly [string, Record<string, JsonValue>]>): FleetDrift[] {
+  if (panels.length < 2) return [];
+  const ids = [...new Set(panels.flatMap(([, settings]) => Object.keys(settings)))].sort();
+  const drift: FleetDrift[] = [];
+  for (const id of ids) {
+    const values: Record<string, JsonValue> = {};
+    for (const [name, settings] of panels) if (Object.hasOwn(settings, id)) values[name] = settings[id] as JsonValue;
+    const distinct = new Set(Object.values(values).map((value) => JSON.stringify(value)));
+    // Missing on some panels counts too: a replica on an old deploy is what this is for.
+    if (distinct.size > 1 || Object.keys(values).length < panels.length) drift.push({ id, values });
+  }
+  return drift;
+}
+
+/** Settings that differ, one row each, a column per panel. Absent when they all agree. */
+function driftTable(entries: readonly FleetEntry[], drift: readonly FleetDrift[]): string {
+  if (drift.length === 0) return "";
+  const names = entries.filter((entry) => entry.reachable).map((entry) => entry.name);
+  const head = names.map((name) => `<th scope="col">${escapeHtml(name)}</th>`).join("");
+  const body = drift
+    .map((line) => `<tr><th scope="row">${escapeHtml(line.id)}</th>${names.map((name) => `<td>${Object.hasOwn(line.values, name) ? escapeHtml(JSON.stringify(line.values[name])) : "<small>not set here</small>"}</td>`).join("")}</tr>`)
+    .join("\n");
+  return `<h2>Settings that differ</h2><p>${drift.length} setting${drift.length === 1 ? " is" : "s are"} not the same on every panel: a replica that refused a synced change, or one running another version.</p><div class="table"><table><thead><tr><th scope="col">Setting</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function renderFleet(title: string, theme: Theme, entries: readonly FleetEntry[], drift: readonly FleetDrift[], nonce: string, refreshSeconds: number | undefined, now: number): string {
   const down = entries.filter((entry) => !entry.reachable).length;
   const rows = entries
     .map((entry) => {
-      const state = entry.reachable ? `<span class="ok">Answering</span>` : `<span class="bad">Not answering</span><br><small>${escapeHtml(entry.problem ?? "")}</small>`;
+      const since = entry.since === undefined ? "" : ` <small>since ${escapeHtml(new Date(entry.since).toISOString())}${now - entry.since < 60_000 ? " (just changed)" : ""}</small>`;
+      const state = entry.reachable ? `<span class="ok">Answering</span>${since}` : `<span class="bad">Not answering</span>${since}<br><small>${escapeHtml(entry.problem ?? "")}</small>`;
       const warnings = entry.warnings === undefined ? "" : entry.warnings === 0 ? "None" : `<span class="warn">${entry.warnings}</span>`;
       return `<tr><th scope="row"><a href="${escapeHtml(entry.link)}">${escapeHtml(entry.name)}</a></th><td>${state}</td><td>${escapeHtml(entry.title ?? "")}${entry.instance === undefined ? "" : ` · ${escapeHtml(entry.instance)}`}</td><td>${escapeHtml(entry.version ?? "")}</td><td>${warnings}</td><td>${entry.tookMs === undefined ? "" : `${entry.tookMs} ms`}</td></tr>`;
     })
@@ -171,6 +246,7 @@ function renderFleet(title: string, theme: Theme, entries: readonly FleetEntry[]
 body { margin: 0; background: var(--apb-background); color: var(--apb-ink); font: var(--apb-font-size) var(--apb-font); }
 main { max-width: 64rem; margin: 0 auto; padding: calc(var(--apb-spacing) * 3) 16px; }
 h1 { font-size: 1.4em; margin: 0 0 var(--apb-spacing); }
+h2 { font-size: 1.1em; margin: calc(var(--apb-spacing) * 3) 0 var(--apb-spacing); }
 p { color: var(--apb-ink-secondary); margin: 0 0 calc(var(--apb-spacing) * 2); }
 .table { overflow-x: auto; background: var(--apb-surface); border: 1px solid var(--apb-border); border-radius: var(--apb-radius); }
 table { width: 100%; border-collapse: collapse; }
@@ -187,6 +263,8 @@ small { color: var(--apb-ink-secondary); }
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="referrer" content="no-referrer">',
+    // A scriptless page refreshes itself this way; the CSP allows no script to do it.
+    refreshSeconds === undefined ? "" : `<meta http-equiv="refresh" content="${refreshSeconds}">`,
     `<title>${escapeHtml(title)}</title>`,
     `<style nonce="${nonce}">${css}</style>`,
     "</head>",
@@ -198,6 +276,7 @@ small { color: var(--apb-ink-secondary); }
     `<div class="table"><table><thead><tr><th scope="col">Panel</th><th scope="col">State</th><th scope="col">Title</th><th scope="col">Version</th><th scope="col">Warnings</th><th scope="col">Answered in</th></tr></thead><tbody>`,
     rows,
     "</tbody></table></div>",
+    driftTable(entries, drift),
     "</main>",
     "</body>",
     "</html>",

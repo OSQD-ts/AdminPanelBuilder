@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { toCsv } from "../src/client/csv.js";
+import { initialsOf, slotOf } from "../src/client/format.js";
 import { binCount, histogram, lttb, stack } from "../src/client/downsample.js";
 import { translator } from "../src/client/i18n.js";
 
@@ -39,8 +40,25 @@ describe("CSV export", () => {
 
 describe("the page's words", () => {
   it("come in the schema's language, with the application's replacements on top", () => {
-    expect(translator({ locale: "pl" })("apply")).toBe("Zastosuj");
+    // The client carries English; another language arrives with the schema as `translations`.
+    expect(translator({ locale: "pl", translations: { apply: "Zastosuj" } })("apply")).toBe("Zastosuj");
+    expect(translator({ locale: "pl" })("apply")).toBe("Apply");
     expect(translator({ locale: "en", messages: { apply: "Save" } })("apply")).toBe("Save");
     expect(translator({ locale: "en" })("reconnecting", { seconds: 4 })).toBe("Cannot reach the panel. Trying again in 4 s.");
+  });
+});
+
+describe("who made a change", () => {
+  it("has up to two initials, and the same colour slot on every page", () => {
+    expect(initialsOf("Ada Lovelace")).toBe("AL");
+    expect(initialsOf("ada")).toBe("AD");
+    expect(initialsOf("ops-bot")).toBe("OB");
+    expect(initialsOf("sam.k@example.com")).toBe("SK");
+    expect(initialsOf("")).toBe("?");
+    expect(slotOf("ada")).toBe(slotOf("ada"));
+    for (const name of ["ada", "sam", "ops-bot", "store", "a very long operator name"]) {
+      expect(slotOf(name)).toBeGreaterThanOrEqual(1);
+      expect(slotOf(name)).toBeLessThanOrEqual(8);
+    }
   });
 });

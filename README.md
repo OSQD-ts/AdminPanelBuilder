@@ -44,7 +44,7 @@ The README is the argument and the shortest path to a working panel. Everything 
 | **Start here** | [Installation](docs/start/installation.md) · [Your first panel](docs/start/first-panel.md) · [Upgrading](docs/start/upgrading.md) |
 | **Concepts** | [How it works](docs/concepts/how-it-works.md) · [Values](docs/concepts/values.md) · [Groups](docs/concepts/groups.md) · [Charts](docs/concepts/charts.md) · [Actions](docs/concepts/actions.md) · [Tables, feeds and profiles](docs/concepts/blocks.md) · [Counters](docs/concepts/counters.md) · [Using the page](docs/concepts/the-page.md) |
 | **[Serving it](docs/integration/index.md)** | [On a path](docs/integration/mounting.md) · [On a port](docs/integration/own-port.md) · [Embedded as HTML](docs/integration/embedding.md) · [On an edge runtime](docs/integration/fetch.md) · [Koa and Fastify](docs/integration/koa-fastify.md) · [Another process](docs/integration/remote.md) · [Other frameworks](docs/integration/frameworks.md) · [The command line](docs/integration/cli.md) |
-| **Recipes** | [ch3ss](docs/integration/ch3ss.md) · [anymail](docs/integration/anymail.md) · [bothandlerjs](docs/integration/bothandlerjs.md) · [hackerpot](docs/integration/hackerpot.md) · [BIS](docs/integration/bis.md) |
+| **Examples and recipes** | [Seven runnable examples](docs/examples.md) · [bothandlerjs](docs/integration/bothandlerjs.md) · [hackerpot](docs/integration/hackerpot.md) |
 | **[Operations](docs/operations/index.md)** | [Security](docs/operations/security.md) · [Themes](docs/operations/themes.md) · [Persistence](docs/operations/persistence.md) · [Changes and notices](docs/operations/changes-and-notices.md) · [Audit](docs/operations/audit.md) · [Metrics](docs/operations/metrics.md) · [Configuration](docs/operations/configuration.md) · [Several processes](docs/operations/replicas.md) |
 | **Testing** | [Testing your panel](docs/testing/your-panel.md) · [Trying it locally](docs/testing/try-it.md) |
 | **Reference** | [API](docs/reference/api.md) · [HTTP API](docs/reference/http-api.md) · [Data shapes](docs/reference/data-shapes.md) · [Limits](docs/reference/limits.md) · [Design decisions](docs/design/decisions.md) |
@@ -96,7 +96,7 @@ The trade-offs, and what each costs, are in [the design decisions](docs/design/d
 ## Try it
 
 ```bash
-npm run demo        # a chess server's panel on :9780, a mail service's embedded three ways on :9781
+npm run demo        # a service dashboard on :9780, a shop with the panel embedded three ways on :9781
 npm run example     # the smallest panel, on :9780
 npm run playground  # every theme, light and dark, with contrast measured, on :9786
 ```

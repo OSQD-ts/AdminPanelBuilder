@@ -43,14 +43,15 @@ Options for each: [values](../concepts/values.md), [charts](../concepts/charts.m
 | `handler(options?)`, `listen(options?)`, `fetchHandler(options?)` | Serving it. See [serving](../integration/index.md). |
 | `html({ api } \| { snapshot, nonce?, groups?, document? }, and script?, group?, compact?)` | The panel as HTML. See [embedding](../integration/embedding.md). |
 | `schema(scope?)`, `state(scope?, since?, after?, feed?)` | What a page is sent. |
-| `edit(id, value, by, scope, { revertAfterMs?, at? })` | An operator's change; a proposal for a value declared with `approval`; scheduled when given `at`. |
+| `edit(id, value, by, scope, { revertAfterMs?, at?, repeat?, reason? })` | An operator's change; a proposal for a value declared with `approval`; scheduled with `at`, repeating with `repeat`. |
 | `checkAsync([[id, value], …])` | Runs the `validateAsync` checks of the values about to change; the first refusal, or nothing. Listeners run it before `edit`. |
-| `cancelScheduled(id, by, scope)` | Cancels a scheduled change before its time. |
-| `exportSettings(scope)`, `diffSettings(settings, scope)`, `importSettings(settings, by, scope)` | Settings as JSON: what they are, what importing would change, and importing whole or not at all. |
-| `approve(pendingId, by, scope)`, `reject(pendingId, by, scope)` | Deciding a proposal. |
-| `undo(changeId, by, scope)` | Writes back what an edit replaced. |
-| `applyProfile(id, by, scope)` | Applies a profile whole, or nothing of it. |
-| `run(id, by, scope, input?)`, `runRowAction(table, action, row, by, scope)` | Running actions. |
+| `cancelScheduled(id, by, scope)` | Cancels a scheduled or repeating change before its (next) time. |
+| `exportSettings(scope)`, `diffSettings(settings, scope)`, `importSettings(settings, by, scope, { reason? })` | Settings as JSON: what they are, what importing would change, and importing whole or not at all. |
+| `await approve(pendingId, by, scope)`, `await reject(pendingId, by, scope, { reason? })` | Deciding a proposal: a value's change is applied, a profile applied, an action run with its input. With replicas, exactly one decides. |
+| `pendingKind(id)` | Whether a proposal is a value's, an action's or a profile's. |
+| `undo(changeId, by, scope, { reason? })` | Writes back what an edit, a profile or an import replaced. |
+| `applyProfile(id, by, scope, { revertAfterMs?, at?, repeat?, reason? })` | Applies a profile whole, or nothing of it: now, for a while, later, or by a rule. |
+| `run(id, by, scope, input?, { reason? })`, `runRowAction(table, action, row, by, scope)` | Running actions; an action declared with `approval` answers `{ pending }`. |
 | `tableRows(id, query, scope)` | A page of a table. |
 | `get(id)`, `changes()`, `pending()`, `notices()`, `currentTheme()` | Reading back. |
 | `on("change" \| "notice" \| "error" \| "alert", listener)` | Subscribing; returns the way to stop. |
@@ -59,7 +60,8 @@ Options for each: [values](../concepts/values.md), [charts](../concepts/charts.m
 | `flushed()` | Settles once every change so far is in the change log store: await it before a planned exit. |
 | `close()` | Stops the timers, saves kept chart histories and leaves the sync channel. |
 
-`canEdit(scope, group)` and `canRun(scope, group)` answer what a scope allows; `narrowScope(scope,
+`ChangeOptions` is the options object `edit` and `applyProfile` take; `RepeatRule` is `{ every: "day" |
+"week", at: "HH:MM", weekday?, timeZone }`. `canEdit(scope, group)` and `canRun(scope, group)` answer what a scope allows; `narrowScope(scope,
 grants)` is a scope narrowed to one operator's grants, never widened.
 
 ### `PanelValue`
@@ -74,11 +76,13 @@ grants)` is a scope narrowed to one operator's grants, never widened.
 | `materialTheme`, `appleTheme`, `osqdTheme`, `fluentTheme`, `carbonTheme`, `highContrastTheme`, `BUILT_IN_THEMES` | The themes that ship. |
 | `defineTheme(definition)`, `contrastRatio(a, b)`, `themePlaygroundHtml(themes?, nonce?)` | A theme of your own, measured. See [themes](../operations/themes.md). |
 | `memoryStore(initial?)`, `fileStore(path)`, `redisStore(redis, options?)` | Stores for `persist`. See [persistence](../operations/persistence.md). |
-| `memoryChangeLog()`, `fileChangeLog(path)`, `redisChangeLog(redis, options?)` | Where every change is kept. See [audit](../operations/audit.md). |
+| `memoryChangeLog()`, `fileChangeLog(path, { rotate?, keep? })`, `redisChangeLog(redis, options?)` | Where every change is kept; the file log rotates by size or day. See [audit](../operations/audit.md). |
 | `verifyChain(records)` | Checks a stored log's hash chain; the first record that breaks it. See [audit](../operations/audit.md). |
-| `memorySync()`, `redisSync({ publisher, subscriber, channel? })` | Carry changes between replicas. See [several processes](../operations/replicas.md). |
+| `memorySync()`, `redisSync({ publisher, subscriber, channel?, claim? })`, `redisClaim(client, options?)` | Carry changes, proposals and schedules between replicas, and decide once. See [several processes](../operations/replicas.md). |
+| `redisRevocations(redis, options?)` | Sign-outs every replica honours: `auth.session.revocations`. |
 | `clientScript({ api? , nonce? })` | The one script tag for a page of fragments rendered with `script: false`. |
-| `jsonLineSink(write?)`, `webhookSink(options)`, `notifySink(notifier)` | Audit sinks for `panel.on("change", …)`. |
+| `jsonLineSink(write?)`, `webhookSink(options)`, `notifySink(notifier)`, `syslogSink(options?)`, `otelLogSink(logger)` | Audit sinks for `panel.on("change", …)`; each has `.alert` for `panel.on("alert", …)`. |
+| `otelMetrics(panel, meterOrProvider, { prefix?, groups? })` | The `/metrics` series through OpenTelemetry. See [metrics](../operations/metrics.md). |
 | `signSession(secret, name, { ttlMs?, grants? })`, `sessionInfo(secret, cookie)` | A cookie value for `auth: { session }`, and what one says. `secret` may be a list, to rotate. See [security](../operations/security.md). |
 | `redisThrottleStore(redis, prefix?)` | Shares failed sign-ins between replicas: `authThrottle: { store }`. |
 | `LOCALES` | The page's own words in each shipped language. |
@@ -86,7 +90,7 @@ grants)` is a scope narrowed to one operator's grants, never widened.
 | `AdminPanelConfigError`, `ValueError` | The two refusals. |
 | `PanelGroup`, `PanelAction`, `PanelTable`, `PanelFeed` | What the declarations return. |
 | `VERSION` | The package version. |
-| `MAX_HISTORY_POINTS`, `MIN_SAMPLE_INTERVAL_MS`, `MIN_POLL_INTERVAL_MS`, `MAX_SERIES`, `MAX_CHANGES`, `MAX_NOTICES`, `MAX_WIRE_BYTES`, `DEFAULT_MAX_LENGTH`, `MIN_TOKEN_LENGTH`, `DEFAULT_ACTION_TIMEOUT_MS`, `DEFAULT_PORT`, `MAX_PAGE_SIZE`, `MAX_SEARCH_LENGTH`, `MAX_FEED_CAPACITY`, `MAX_ENTRY_TEXT`, `MAX_REVERT_MS`, `APPROVAL_TTL_MS`, `MAX_PENDING`, `MIN_SESSION_SECRET_LENGTH`, `MAX_SCHEDULED`, `MAX_SCHEDULE_AHEAD_MS`, `MAX_SYNC_MESSAGE_BYTES`, `MAX_WEBHOOK_RETRIES`, `MAX_REVOKED_SESSIONS`, `DEFAULT_WRITES_PER_MINUTE` | See [limits](limits.md). |
+| `MAX_HISTORY_POINTS`, `MIN_SAMPLE_INTERVAL_MS`, `MIN_POLL_INTERVAL_MS`, `MAX_SERIES`, `MAX_CHANGES`, `MAX_NOTICES`, `MAX_WIRE_BYTES`, `DEFAULT_MAX_LENGTH`, `MIN_TOKEN_LENGTH`, `DEFAULT_ACTION_TIMEOUT_MS`, `DEFAULT_PORT`, `MAX_PAGE_SIZE`, `MAX_SEARCH_LENGTH`, `MAX_FEED_CAPACITY`, `MAX_ENTRY_TEXT`, `MAX_REVERT_MS`, `APPROVAL_TTL_MS`, `MAX_PENDING`, `MIN_SESSION_SECRET_LENGTH`, `MAX_SCHEDULED`, `MAX_SCHEDULE_AHEAD_MS`, `MAX_SYNC_MESSAGE_BYTES`, `MAX_WEBHOOK_RETRIES`, `MAX_REVOKED_SESSIONS`, `DEFAULT_WRITES_PER_MINUTE`, `MAX_REASON_LENGTH`, `MIN_ROTATE_BYTES`, `MAX_GRID_COLUMNS`, `MAX_CARD_ROWS`, `MAX_LAYOUT_BYTES`, `MAX_LAYOUT_ENTRIES` | See [limits](limits.md). |
 
 ## `@osqd/admin-panel-builder/adapters`
 
@@ -100,7 +104,8 @@ with `MAX_FLEET_PANELS`.
 
 Serve options: `basePath`, `auth`, `controls: { edit, actions }` (each `true` or a list of groups),
 `groups`, `allowedHosts`, `authThrottle` (with `store` to share it), `writeLimit`, `stream`, `metrics`,
-`clock`; `listen` adds `port` and `host`, `fetchHandler` adds `address`. `remotePanelHandler` also
+`health`, `clock`; `listen` adds `port` and `host`, `fetchHandler` adds `address`. The server `listen`
+returns has `reload(options, { by })`: see [configuration](../operations/configuration.md#reloading). `remotePanelHandler` also
 takes `groups` and `stream`.
 
 ## `@osqd/admin-panel-builder/client`
@@ -121,7 +126,8 @@ headers?), as(token) }`; `EVERYTHING`, the scope with every control; `ManualCloc
 ## `@osqd/admin-panel-builder/config`
 
 `loadConfig({ text?, file?, env? })`, `listenOptions(config)`, `printConfig(config)`,
-`planReload(current, next, by)` with `RESTART_REQUIRED` and `RELOADABLE`; the parts: `parseToml(text)`,
+`planReload(current, next, by)` with `RESTART_REQUIRED` and `RELOADABLE`, `reloadListener(server,
+current, next, by, log?)` to apply one; the parts: `parseToml(text)`,
 `readConfig(table)`, `applyEnvironment(config, env)`, `envBoolean(text)`, `Section`, `ConfigError`,
 `DEFAULT_CONFIG`, `MAX_CONFIG_LENGTH`. See [configuration](../operations/configuration.md).
 

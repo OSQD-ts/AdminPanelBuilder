@@ -25,8 +25,12 @@ export interface ActionDefinition {
   order: number;
   sequence: number;
   span: import("./types.js").Span | undefined;
+  size: import("./types.js").CardSize | undefined;
   visibleWhen: (() => boolean) | undefined;
   disabledWhen: (() => string | false | undefined) | undefined;
+  typeToConfirm: boolean;
+  approval: boolean;
+  reasonRequired: boolean;
 }
 
 export class PanelAction {

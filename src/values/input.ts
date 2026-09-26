@@ -46,14 +46,14 @@ export function resolveInput(action: string, fields: Readonly<Record<string, Inp
 /** The operator's answers, checked. Unknown names and missing required fields are refused by name. */
 export function checkInput(fields: readonly ResolvedField[], raw: unknown): Record<string, JsonValue> {
   const given = raw === undefined || raw === null ? {} : raw;
-  if (typeof given !== "object" || Array.isArray(given)) throw new ValueError("the input must be an object of field values");
+  if (typeof given !== "object" || Array.isArray(given)) throw new ValueError("the input must be an object of field values", { key: "refuseInputShape", params: {} });
   const known = new Set(fields.map((field) => field.schema.name));
-  for (const name of Object.keys(given)) if (!known.has(name)) throw new ValueError(`there is no input field "${name}"`);
+  for (const name of Object.keys(given)) if (!known.has(name)) throw new ValueError(`there is no input field "${name}"`, { key: "refuseInputUnknown", params: { name } });
   const out: Record<string, JsonValue> = {};
   for (const { schema, pattern } of fields) {
     const value = (given as Record<string, unknown>)[schema.name];
     if (value === undefined || value === null || value === "") {
-      if (!schema.optional) throw new ValueError(`${schema.label} is required`);
+      if (!schema.optional) throw new ValueError(`${schema.label} is required`, { key: "refuseRequired", params: { label: schema.label } });
       continue;
     }
     checkValue(schema.label, schema.kind, schema.constraints, value, pattern);

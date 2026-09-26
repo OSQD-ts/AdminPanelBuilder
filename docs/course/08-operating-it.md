@@ -37,6 +37,8 @@ await panel.listen({ auth: { tokens: { ada: process.env.ADA_TOKEN!, deploy: proc
 7. Nothing sensitive is shown: keys and passwords are `sensitive: true`.
 8. `npm run check` passes in your own test suite with `createAdminPanel()` and a `ManualClock`.
 
+Next: [9. Planned and explained](09-planned-and-explained.md).
+
 ## Related
 
 - [Security](../operations/security.md) · [Testing your panel](../testing/your-panel.md)

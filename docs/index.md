@@ -48,11 +48,9 @@
 
 | | |
 | --- | --- |
-| [ch3ss](integration/ch3ss.md) | Games, matchmaking and ratings for a chess server. |
-| [anymail](integration/anymail.md) | Queues, providers and limits for a mail service. |
+| [Examples](examples.md) | Seven runnable panels, each going deep into one part of the engine. |
 | [bothandlerjs](integration/bothandlerjs.md) | What the bot handler decides, and the settings worth changing live. |
 | [hackerpot](integration/hackerpot.md) | Hits by detector, and detector switches. |
-| [BIS](integration/bis.md) | A panel inside an application that already has users. |
 
 ## Operations
 

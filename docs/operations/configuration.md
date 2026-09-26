@@ -34,7 +34,9 @@ whether it is set.
 
 The package ships [`admin-panel.toml`](../../admin-panel.toml): every setting, at its default, with what
 changing it does. Deleting it changes nothing; a test holds it to the built-in defaults. The sections are
-`[listen]`, `[auth]`, `[controls]`, `[view]`, `[stream]`, `[metrics]`, `[throttle]` and `[write_limit]`.
+`[listen]`, `[auth]`, `[controls]`, `[view]`, `[stream]`, `[metrics]`, `[health]`, `[throttle]` and
+`[write_limit]`. `[health] enabled = true` offers `GET /healthz` to a load balancer, without
+authentication, as `health: true` does in code.
 
 The reader is strict. A key nothing reads is an error naming the nearest real one (`stream.max_veiwers
 is not a setting; did you mean stream.max_viewers?`), a port is 0 to 65535, a boolean has no quotes, and
@@ -59,6 +61,19 @@ for (const { key, reason } of plan.requiresRestart) log.warn(`${key} needs a res
 `RESTART_REQUIRED` names each setting that cannot change under a running listener and why (the socket is
 bound to the old port; open streams keep their pace); `RELOADABLE` lists the rest. `by` says who asked,
 because a reload whose author is unknown is half an audit trail.
+
+`reloadListener` applies it:
+
+```ts
+process.on("SIGHUP", async () => {
+  config = reloadListener(server, config, await loadConfig(), "SIGHUP");
+});
+```
+
+It logs each setting that needs a restart, one line each, then calls `server.reload()`, which swaps in a
+router with the new settings for the next request and leaves requests in flight alone. New settings that
+do not validate are refused whole and the old ones stay. A reload that changed something is a notice
+naming who asked. [`examples/configuration.ts`](../../examples/configuration.ts) runs this way.
 
 ## Related
 

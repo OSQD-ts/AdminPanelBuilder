@@ -26,7 +26,9 @@ await panel.ready;                               // stored choices applied; neve
   move.
 
 `fileStore` writes asynchronously (never `writeFileSync` inside your server), serialises writes, and
-writes to a temporary file renamed over the real one, so a crash mid-write leaves the previous file.
+writes to a temporary file that is flushed to the disk and renamed over the real one, so a crash
+mid-write — or a power cut — leaves the previous file rather than half a document. A write that fails
+takes its temporary file with it.
 `memoryStore` is for tests. A store of your own implements two methods:
 
 ```ts

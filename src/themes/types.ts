@@ -48,6 +48,8 @@ export interface ThemeColors {
   grid: string;
   /** Card elevation, as a `box-shadow` value, or `none`. */
   shadow: string;
+  /** Elevation of what floats above the cards — the bar across the top, a hovered card, a dialog — as a `box-shadow` value, or `none`. */
+  shadowRaised: string;
   /** Eight chart colours. Adjacent slots stay apart under the common colour vision deficiencies. */
   chart: readonly [string, string, string, string, string, string, string, string];
 }

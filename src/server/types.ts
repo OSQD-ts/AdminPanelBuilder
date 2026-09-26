@@ -39,7 +39,7 @@ export type PanelAuth =
    * A signed cookie your own sign-in sets with `signSession()`. `secret` may be a list: the first signs,
    * all verify. `revoked(id)` is asked about every session; `true` refuses it.
    */
-  | { session: { secret: string | readonly string[]; cookie?: string | undefined; revoked?: ((id: string) => boolean | Promise<boolean>) | undefined; now?: (() => number) | undefined } }
+  | { session: { secret: string | readonly string[]; cookie?: string | undefined; revoked?: ((id: string) => boolean | Promise<boolean>) | undefined; revocations?: import("./session.js").RevocationStore | undefined; now?: (() => number) | undefined } }
   /** Sign-in with an OpenID Connect provider. */
   | { oidc: import("./oidc.js").OidcOptions }
   | { basic: { username: string; password: string } | ReadonlyArray<{ username: string; password: string }> }
@@ -88,6 +88,11 @@ export interface ServeOptions {
    * `store` shares the counts between replicas: see `redisThrottleStore`.
    */
   authThrottle?: { failures?: number | undefined; windowMs?: number | undefined; store?: import("./auth.js").ThrottleStore | undefined } | false | undefined;
+  /**
+   * `GET /healthz` without authentication, for a load balancer: "ok", or "ok, 2 warnings" when the
+   * panel has warning notices, and nothing else. Off by default, because it answers anybody.
+   */
+  health?: boolean | undefined;
   /** Writes (edits, actions, approvals, imports) one operator may make a minute before a 429. Default 60; `false` turns it off. */
   writeLimit?: { perMinute?: number | undefined } | false | undefined;
   /** For tests. */
@@ -113,6 +118,8 @@ export interface PanelRequest {
   /** Lower-cased names. */
   headers: Readonly<Record<string, string | undefined>>;
   address: string;
+  /** Whether the connection is TLS, as the front end knows it. A proxy says so in `x-forwarded-proto` instead. */
+  secure?: boolean | undefined;
   /** The body as text, refusing past `limit` bytes with a `BodyTooLargeError`. */
   body(limit: number): Promise<string>;
 }

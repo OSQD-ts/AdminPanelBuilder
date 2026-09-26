@@ -27,8 +27,9 @@ import { MAX_FEED_CAPACITY, PanelFeed } from "./blocks/feed.js";
 import { checkTableOptions, MAX_SEARCH_LENGTH, PanelTable } from "./blocks/table.js";
 import { ChangeLog, type ChangeLogStore, MAX_CHANGES } from "./change-log.js";
 import { AdminPanelConfigError, ValueError } from "./errors.js";
-import { ENGLISH, LOCALES, type MessageKey } from "./i18n/messages.js";
-import { withDeadline, withTimeout } from "./internal/async.js";
+import { ENGLISH, format, LOCALES, type MessageKey } from "./i18n/messages.js";
+import { refusal } from "./i18n/refuse.js";
+import { withDeadline, } from "./internal/async.js";
 import { type Clock, systemClock } from "./internal/clock.js";
 import { Emitter } from "./internal/emitter.js";
 import { checkId, slug } from "./internal/ids.js";
@@ -36,43 +37,52 @@ import { rejectUnknown } from "./internal/options.js";
 import { checkAlert, AlertMonitor } from "./panel/alerts.js";
 import { APPROVAL_TTL_MS, Approvals, MAX_PENDING } from "./panel/approvals.js";
 import { ChartRegistry, MAX_SERIES } from "./panel/charts.js";
-import { checkGroupName, checkPoll, checkScheme, checkSpan, checkTitle, defaultOnError, describe, looksSecret, message, MIN_POLL_INTERVAL_MS, readSafely, sameJson } from "./panel/checks.js";
-import { checkProfileSettings, profileActive, type ProfileEntry, profileSchema } from "./panel/profiles.js";
-import { ChangeSchedule, MAX_SCHEDULE_AHEAD_MS, MAX_SCHEDULED, SCHEDULE_KEY, type ScheduleEntry } from "./panel/schedule.js";
+import { checkCardSize, checkGroupName, checkPoll, checkScheme, checkSpan, checkTitle, defaultOnError, describe, looksSecret, message, MIN_POLL_INTERVAL_MS, readSafely, sameJson } from "./panel/checks.js";
+import { PanelGroup } from "./panel/group.js";
+import { Replication } from "./panel/replication.js";
+import { diffSettings, exportSettings } from "./panel/settings.js";
+import { actionSchema, checkCondition, checkReason, checkReasonOption, conditionOf, decorateWire, MAX_REASON_LENGTH, scheduledShape, valueSchema } from "./panel/wire.js";
+import { checkProfileSettings, profileActive, type ProfileEntry, profileSchema, profileWritable } from "./panel/profiles.js";
+import { checkRepeat, describeRepeat, nextRun, type RepeatRule } from "./panel/recurrence.js";
+import { ChangeSchedule, MAX_SCHEDULE_AHEAD_MS, MAX_SCHEDULED, type NewEntry, SCHEDULE_KEY, type ScheduleEntry } from "./panel/schedule.js";
 import { type ActionOutcome, anyAllowed, canEdit, canRun, type EditOutcome, type PanelScope, READ_ONLY_SCOPE, visible } from "./panel/scope.js";
-import type { PanelSync, SyncMessage } from "./panel/sync.js";
+import { checkGrid, DEFAULT_GRID, MAX_LAYOUT_BYTES, readLayout } from "./panel/layout.js";
+import type { ChangeMessage, LayoutMessage, PanelSync } from "./panel/sync.js";
 import { type HtmlOptions, renderFragment } from "./render/html.js";
 import type { ListenOptions, ServeOptions } from "./server/types.js";
 import type { ValueStore } from "./stores/types.js";
-import { resolveTheme } from "./themes/index.js";
+import { BUILT_IN_THEMES, resolveTheme } from "./themes/index.js";
 import type { Theme } from "./themes/types.js";
 import type {
   ActionContext,
   ActionOptions,
-  ActionSchema,
   Alert,
   BindOptions,
+  CardSize,
   ChangeRecord,
   ChartOptions,
   FeedOptions,
   FeedSchema,
+  GroupLayout,
   GroupOptions,
   GroupSchema,
+  GridShape,
   ItemSchema,
   JsonValue,
   ModifiableOptions,
   Notice,
+  PanelLayout,
   PanelSchema,
   PanelState,
   PendingChange,
   ProfileOptions,
+  ScheduledChange,
   SettingDiff,
   SharedChartOptions,
   Span,
   TableOptions,
   TableQuery,
   TableRowsAnswer,
-  ValueSchema,
   ViewableOptions,
   WireValue,
 } from "./types.js";
@@ -83,6 +93,8 @@ import { checkStatusRule, statusOf } from "./values/status.js";
 import { VERSION } from "./version.js";
 
 export { canEdit, canRun, READ_ONLY_SCOPE, narrowScope } from "./panel/scope.js";
+export { PanelGroup } from "./panel/group.js";
+export { MAX_REASON_LENGTH };
 export type { ActionOutcome, EditOutcome, Grants, PanelScope } from "./panel/scope.js";
 export { APPROVAL_TTL_MS, MAX_CHANGES, MAX_PENDING, MAX_SCHEDULE_AHEAD_MS, MAX_SCHEDULED, MAX_SERIES, MIN_POLL_INTERVAL_MS };
 
@@ -93,6 +105,17 @@ export interface AdminPanelOptions {
   instance?: string | undefined;
   /** A theme from `defineTheme`, or `"material"` (the default), `"apple"`, `"osqd"`, `"fluent"`, `"carbon"` or `"high-contrast"`. */
   theme?: Theme | string | undefined;
+  /**
+   * Themes a viewer may choose among in the page's Settings, beside the panel's own. Every built-in
+   * theme is offered unless this says otherwise; themes from `defineTheme` given here are added to
+   * the list (one named like a built-in replaces it). `false` keeps every viewer on `theme`.
+   */
+  themes?: ReadonlyArray<Theme | string> | false | undefined;
+  /**
+   * The grid of cells every group is laid out in: `columns` at full width (default 12) and
+   * `rowHeight`, the height of a row in pixels (default 72). A group may have its own.
+   */
+  grid?: Partial<GridShape> | undefined;
   /** `"auto"` follows the viewer's system. Default `"auto"`. */
   colorScheme?: "auto" | "light" | "dark" | undefined;
   /** How often the page asks for new values. Default 1000, at least `MIN_POLL_INTERVAL_MS`. */
@@ -134,14 +157,44 @@ export const MAX_NOTICES = 100;
 /** The longest a timed change may wait to revert: a week. Longer is a setting, not a temporary one. */
 export const MAX_REVERT_MS = 7 * 24 * 3_600_000;
 
-const COMMON_KEYS = ["id", "label", "description", "group", "order", "span"];
+const COMMON_KEYS = ["id", "label", "description", "group", "order", "span", "size"];
 const VIEWABLE_KEYS = [...COMMON_KEYS, "kind", "unit", "format", "decimals", "chart", "sensitive", "min", "max", "status", "alert", "visibleWhen", "disabledWhen", "timeline"];
-const MODIFIABLE_KEYS = [...VIEWABLE_KEYS, "step", "integer", "options", "maxLength", "pattern", "multiline", "validate", "onChange", "persist", "confirm", "approval", "timed", "validateAsync", "validateTimeoutMs"];
+const MODIFIABLE_KEYS = [...VIEWABLE_KEYS, "step", "integer", "options", "maxLength", "pattern", "multiline", "validate", "onChange", "persist", "confirm", "approval", "timed", "validateAsync", "validateTimeoutMs", "reason"];
+
+/** How an operator's change is made: now, for a while, at a time, by a rule, and why. */
+export interface ChangeOptions {
+  revertAfterMs?: number | undefined;
+  at?: number | undefined;
+  repeat?: RepeatRule | undefined;
+  reason?: string | undefined;
+}
+
+/** Every group and every control: what the panel uses for changes it makes itself (a schedule firing). */
+const INTERNAL: PanelScope = { groups: undefined, edit: true, actions: true, restrictions: [] };
 const BIND_KEYS = [...MODIFIABLE_KEYS, "editable"];
-const SHARED_CHART_KEYS = ["kind", "over", "title", "group", "series", "description", "order", "span", "points", "sampleEveryMs", "min", "max", "stacked", "lines", "annotate", "bins"];
-const PANEL_KEYS = ["title", "instance", "theme", "colorScheme", "pollIntervalMs", "defaultGroup", "store", "clock", "onError", "changeLog", "locale", "messages", "sync", "keepHistory"];
+const SHARED_CHART_KEYS = ["kind", "over", "title", "group", "series", "description", "order", "span", "size", "points", "sampleEveryMs", "min", "max", "stacked", "lines", "annotate", "bins"];
+const PANEL_KEYS = ["title", "instance", "theme", "themes", "grid", "colorScheme", "pollIntervalMs", "defaultGroup", "store", "clock", "onError", "changeLog", "locale", "messages", "sync", "keepHistory"];
 const SWAPPABLE_KEYS = ["title", "instance", "theme", "colorScheme", "pollIntervalMs"];
 const HISTORY_KEY = "apb.history";
+/** What saving a layout answers: done, or refused with a sentence. */
+export type LayoutOutcome = { ok: true } | Extract<EditOutcome, { ok: false }>;
+
+/** Store key of the layout saved for everybody. Ids starting "apb." are refused for values, so it cannot collide. */
+export const LAYOUT_KEY = "apb.layout";
+const THEME_NAME = /^[a-z][a-z0-9-]{0,39}$/;
+
+/** Themes to offer beside the panel's own, resolved and checked, or false for none. */
+function checkThemes(themes: AdminPanelOptions["themes"]): Theme[] | false {
+  if (themes === undefined) return [];
+  if (themes === false) return false;
+  if (!Array.isArray(themes)) throw new AdminPanelConfigError("createAdminPanel(): themes is a list of themes (from defineTheme, or built-in names), or false");
+  return themes.map((theme) => {
+    const resolved = resolveTheme(theme);
+    // The name becomes an attribute value the stylesheet selects on.
+    if (!THEME_NAME.test(resolved.name)) throw new AdminPanelConfigError(`createAdminPanel(): the theme "${resolved.name}" needs a name of lower-case letters, digits and hyphens to be offered`);
+    return resolved;
+  });
+}
 /** Timeline entries a value keeps by default: enough to see what it has been lately, small enough to send. */
 const DEFAULT_TIMELINE = 20;
 /**
@@ -167,6 +220,11 @@ export class AdminPanel implements ValueOwner {
   private title: string;
   private instance: string | undefined;
   private theme: Theme;
+  /** Themes offered beside the panel's own; false offers none. */
+  private readonly extraThemes: Theme[] | false;
+  private readonly grid: GridShape;
+  /** The layout saved for everybody from the page, over the sizes and order in code. */
+  private sharedLayout: PanelLayout | undefined;
   private colorScheme: "auto" | "light" | "dark";
   private pollIntervalMs: number;
   private readonly defaultGroup: string;
@@ -190,6 +248,7 @@ export class AdminPanel implements ValueOwner {
   private readonly tickers: Ticker[] = [];
   private readonly approvals: Approvals;
   private readonly schedule: ChangeSchedule;
+  private readonly replicas: Replication;
   private readonly alerts: AlertMonitor;
   private readonly timelines = new Map<string, Array<{ at: number; value: JsonValue; by?: string }>>();
   private readonly liveCache = new Map<string, { at: number; wire: WireValue }>();
@@ -219,6 +278,10 @@ export class AdminPanel implements ValueOwner {
     this.title = checkTitle(options.title ?? "Admin panel");
     this.instance = options.instance;
     this.theme = resolveTheme(options.theme);
+    this.extraThemes = checkThemes(options.themes);
+    const grid = options.grid === undefined ? {} : checkGrid(options.grid);
+    if (typeof grid === "string") throw new AdminPanelConfigError(`createAdminPanel(): ${grid}`);
+    this.grid = { ...DEFAULT_GRID, ...grid };
     this.colorScheme = checkScheme(options.colorScheme ?? "auto");
     this.pollIntervalMs = checkPoll(options.pollIntervalMs ?? 1000);
     this.defaultGroup = checkGroupName(options.defaultGroup ?? "General");
@@ -229,7 +292,7 @@ export class AdminPanel implements ValueOwner {
     this.origin = `${options.instance ?? "panel"}-${Math.random().toString(36).slice(2, 10)}`;
     this.events = new Emitter((error, event) => this.onError(error, `a "${event}" listener on the panel`));
     this.locale = options.locale ?? "en";
-    if (LOCALES[this.locale] === undefined) throw new AdminPanelConfigError(`there is no "${this.locale}" translation of the page (there are ${Object.keys(LOCALES).join(", ")}); pass messages to supply your own words`);
+    if (this.locale !== "auto" && LOCALES[this.locale] === undefined) throw new AdminPanelConfigError(`there is no "${this.locale}" translation of the page (there are ${Object.keys(LOCALES).join(", ")}); pass messages to supply your own words`);
     if (options.messages !== undefined) {
       for (const [key, text] of Object.entries(options.messages)) {
         if (!Object.hasOwn(ENGLISH, key)) throw new AdminPanelConfigError(`messages has a key "${key}" the page never shows`);
@@ -252,17 +315,20 @@ export class AdminPanel implements ValueOwner {
       needTimer: () => this.startTimer(),
       nextSequence: () => this.sequence++,
     });
-    this.approvals = new Approvals(() => this.clock.now());
+    this.approvals = new Approvals(() => this.clock.now(), `${this.origin}:p`);
     this.schedule = new ChangeSchedule({
       now: () => this.clock.now(),
-      value: (id) => this.values.get(id),
-      fire: (entry, late) => this.fireScheduled(entry, late),
+      durable: (entry) => (entry.target === "value" ? this.values.get(entry.targetId)?.definition.persist === true : this.store !== undefined && this.profiles.has(entry.targetId)),
+      fire: (entry, late) => this.replicas.fireOnce(entry, late),
       save: (stored) => this.saveToStore(SCHEDULE_KEY, stored, "the schedule of timed changes"),
+      changed: (entry, removed) => this.replicas.scheduled(entry, removed),
+      origin: this.origin,
     });
     this.alerts = new AlertMonitor(
       (value) => this.read(value),
       (alert) => {
-        this.notice("warning", `alert-${alert.target}`, alert.message);
+        // An alert's sentence is the alert's, and reads the same here, in the log and in a webhook.
+        this.notice("warning", `alert-${alert.target}`, { text: alert.message });
         this.events.emit("alert", alert);
       },
     );
@@ -274,18 +340,35 @@ export class AdminPanel implements ValueOwner {
         this.events.emit("change", record);
       },
       (error) => {
-        this.notice("warning", "change-log-append", `A change could not be written to the change log, so it will be missing from the log after a restart: ${message(error)}`);
+        this.notice("warning", "change-log-append", "noticeChangeLogAppend", { reason: message(error) });
         this.onError(error, "writing the change log");
       },
     );
-    if (this.sync !== undefined) this.unsubscribe = this.sync.subscribe((incoming) => this.receive(incoming));
+    this.replicas = new Replication(this.sync, {
+      origin: this.origin,
+      approvals: this.approvals,
+      schedule: this.schedule,
+      knows: (kind, id) => (kind === "action" ? this.actions.has(id) : kind === "profile" ? this.profiles.has(id) : this.values.has(id)),
+      applyChange: (change) => this.applyChange(change),
+      applyLayout: (change) => this.applyLayout(change),
+      bump: (valueId) => {
+        this.version += 1;
+        const value = valueId === undefined ? undefined : this.values.get(valueId);
+        if (value !== undefined) value.version = this.version;
+      },
+      fire: (entry, late) => this.fireScheduled(entry, late),
+      notice: (level, id, key, params) => this.notice(level, id, key, params),
+      clearNotice: (id) => this.noticeLog.delete(id),
+      onError: (error, source) => this.onError(error, source),
+    });
+    if (this.sync !== undefined) this.unsubscribe = this.sync.subscribe((incoming) => this.replicas.receive(incoming));
     if (this.keepHistoryMs !== undefined) this.every(this.keepHistoryMs, () => this.saveHistory());
     const restoring: Promise<void>[] = [];
     if (this.store !== undefined) restoring.push(this.restore(this.store));
     if (options.changeLog !== undefined) {
       restoring.push(
         this.log.restore().catch((error: unknown) => {
-          this.notice("warning", "change-log-load", `The change log could not be loaded, so the page shows only changes made since this start: ${message(error)}`);
+          this.notice("warning", "change-log-load", "noticeChangeLogLoad", { reason: message(error) });
           this.onError(error, "loading the change log");
         }),
       );
@@ -333,7 +416,9 @@ export class AdminPanel implements ValueOwner {
   /** A button that runs `run` in the application. Usable only on a listener that grants `controls.actions`. */
   action(label: string, run: (context: ActionContext) => unknown, options: ActionOptions = {}): PanelAction {
     if (typeof run !== "function") throw new AdminPanelConfigError(`action "${label}" needs a function to run`);
-    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "confirm", "destructive", "timeoutMs", "input", "visibleWhen", "disabledWhen"], `action("${label}")`);
+    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "size", "confirm", "destructive", "timeoutMs", "input", "visibleWhen", "disabledWhen", "approval", "reason"], `action("${label}")`);
+    if (options.confirm !== undefined && typeof options.confirm !== "boolean" && options.confirm !== "type") throw new AdminPanelConfigError(`action "${label}" has confirm ${JSON.stringify(options.confirm)}; it is true, false or "type"`);
+    checkReasonOption(label, options.reason);
     const id = checkId(options.id ?? (slug(label) || `action-${this.actions.size + 1}`), `action "${label}"`);
     if (this.actions.has(id)) throw new AdminPanelConfigError(`two actions have the id "${id}": the second would silently replace the first on the page`);
     const timeoutMs = options.timeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS;
@@ -346,14 +431,18 @@ export class AdminPanel implements ValueOwner {
         id,
         label: checkTitle(options.label ?? label),
         description: options.description,
-        confirm: options.confirm === true || options.destructive === true,
+        confirm: options.confirm === true || options.confirm === "type" || options.destructive === true,
         destructive: options.destructive === true,
         timeoutMs,
         order: options.order ?? 0,
         sequence: this.sequence++,
         span: checkSpan(label, options.span),
+        size: checkCardSize(label, options.size),
         visibleWhen: options.visibleWhen,
         disabledWhen: options.disabledWhen,
+        typeToConfirm: options.confirm === "type",
+        approval: options.approval === true,
+        reasonRequired: options.reason === "required" || options.approval === true,
       },
       run,
       group,
@@ -373,6 +462,7 @@ export class AdminPanel implements ValueOwner {
     const id = checkId(options.id ?? (slug(label) || `table-${this.tables.size + 1}`), `table "${label}"`);
     if (this.tables.has(id)) throw new AdminPanelConfigError(`two tables have the id "${id}"`);
     checkSpan(label, options.span);
+    checkCardSize(label, options.size);
     const table = new PanelTable<Row>(id, checkTitle(options.label ?? label), options, this.ensureGroup(options.group ?? this.defaultGroup), this.sequence++);
     this.tables.set(id, table as unknown as PanelTable<never>);
     this.structureChanged();
@@ -381,7 +471,7 @@ export class AdminPanel implements ValueOwner {
 
   /** A bounded list of events, newest first. `feed.push("text")` or `feed.push({ fields }, "warn")`. */
   feed(label: string, options: FeedOptions = {}): PanelFeed {
-    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "capacity", "perSecond"], `feed("${label}")`);
+    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "size", "capacity", "perSecond"], `feed("${label}")`);
     const id = checkId(options.id ?? (slug(label) || `feed-${this.feeds.size + 1}`), `feed "${label}"`);
     if (this.feeds.has(id)) throw new AdminPanelConfigError(`two feeds have the id "${id}"`);
     const capacity = options.capacity ?? 200;
@@ -389,7 +479,7 @@ export class AdminPanel implements ValueOwner {
     const perSecond = options.perSecond ?? 50;
     if (!Number.isFinite(perSecond) || perSecond < 1) throw new AdminPanelConfigError(`feed "${label}" accepts ${perSecond} entries a second; it must accept at least one`);
     const feed = new PanelFeed(
-      { id, label: checkTitle(options.label ?? label), description: options.description, capacity, perSecond, order: options.order ?? 0, sequence: this.sequence++, span: checkSpan(label, options.span) },
+      { id, label: checkTitle(options.label ?? label), description: options.description, capacity, perSecond, order: options.order ?? 0, sequence: this.sequence++, span: checkSpan(label, options.span), size: checkCardSize(label, options.size) },
       this.ensureGroup(options.group ?? this.defaultGroup),
       this.clock,
       () => ++this.feedSequence,
@@ -404,7 +494,8 @@ export class AdminPanel implements ValueOwner {
    * all, with one change record, and only on a listener that may edit every value it sets.
    */
   profile(label: string, settings: ReadonlyArray<readonly [PanelValue<unknown>, unknown]>, options: ProfileOptions = {}): string {
-    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "confirm"], `profile("${label}")`);
+    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "size", "confirm", "approval", "reason"], `profile("${label}")`);
+    checkReasonOption(label, options.reason);
     const id = checkId(options.id ?? (slug(label) || `profile-${this.profiles.size + 1}`), `profile "${label}"`);
     if (this.profiles.has(id)) throw new AdminPanelConfigError(`two profiles have the id "${id}"`);
     checkProfileSettings(label, settings, (value, where) => this.assertOwn(value, where));
@@ -418,7 +509,11 @@ export class AdminPanel implements ValueOwner {
       order: options.order ?? 0,
       sequence: this.sequence++,
       span: checkSpan(label, options.span),
+      size: checkCardSize(label, options.size),
+      approval: options.approval === true,
+      reasonRequired: options.reason === "required" || options.approval === true,
     });
+    if (this.stored !== undefined) this.schedule.restore(this.stored[SCHEDULE_KEY], "profile", id);
     this.structureChanged();
     return id;
   }
@@ -429,8 +524,12 @@ export class AdminPanel implements ValueOwner {
    */
   group(name: string, options?: GroupOptions): PanelGroup {
     const entry = this.groups.get(this.ensureGroup(name)) as GroupEntry;
-    rejectUnknown(options, ["title", "description", "order", "layout"], `group("${name}")`);
+    rejectUnknown(options, ["title", "description", "order", "layout", "grid"], `group("${name}")`);
     if (options?.layout !== undefined && options.layout !== "grid" && options.layout !== "list") throw new AdminPanelConfigError(`group "${name}" has a layout of ${JSON.stringify(options.layout)}; it is "grid" or "list"`);
+    if (options?.grid !== undefined) {
+      const grid = checkGrid(options.grid);
+      if (typeof grid === "string") throw new AdminPanelConfigError(`group "${name}": ${grid}`);
+    }
     if (options !== undefined) {
       entry.options = { ...entry.options, ...options };
       this.structureChanged();
@@ -445,7 +544,7 @@ export class AdminPanel implements ValueOwner {
     for (const value of options.series) this.assertOwn(value, `chart "${options.title}"`);
     const first = options.series[0] as PanelValue<unknown>;
     const group = this.ensureGroup(options.group ?? first.group);
-    const entry = this.charts.build(options.title, { ...options, in: undefined } as ChartOptions & { span?: Span | undefined; order?: number | undefined }, options.series, "group", group, options.description);
+    const entry = this.charts.build(options.title, { ...options, in: undefined } as ChartOptions & { span?: Span | undefined; size?: CardSize | undefined; order?: number | undefined }, options.series, "group", group, options.description);
     return entry.id;
   }
 
@@ -499,6 +598,58 @@ export class AdminPanel implements ValueOwner {
   /** The theme in use. */
   currentTheme(): Theme {
     return this.theme;
+  }
+
+  /** The themes a viewer may choose among, the panel's first. */
+  offeredThemes(): Theme[] {
+    if (this.extraThemes === false) return [this.theme];
+    const byName = new Map<string, Theme>([[this.theme.name, this.theme]]);
+    for (const theme of [...this.extraThemes, ...Object.values(BUILT_IN_THEMES)]) if (!byName.has(theme.name)) byName.set(theme.name, theme);
+    return [...byName.values()];
+  }
+
+  /** The layout saved for everybody, or undefined when the page follows the code. */
+  layout(): PanelLayout | undefined {
+    return this.sharedLayout === undefined ? undefined : structuredClone(this.sharedLayout);
+  }
+
+  /**
+   * Saves the layout every viewer gets, or with `null` goes back to the sizes and order in code.
+   * Only groups `scope` may edit can change; the others keep what they had, so an operator who
+   * sees two groups saves those two. Recorded in the change log and carried to replicas.
+   */
+  saveLayout(layout: unknown, by: string, scope: PanelScope = INTERNAL, options: { reason?: string | undefined } = {}): LayoutOutcome {
+    const why = checkReason(options.reason, false, "the layout");
+    if (!why.ok) return why;
+    let next: PanelLayout = {};
+    if (layout !== null) {
+      if (layout === undefined || typeof layout !== "object" || Array.isArray(layout)) return { ok: false, reason: "invalid", ...refusal("refuseLayoutShape") };
+      if (JSON.stringify(layout).length > MAX_LAYOUT_BYTES) return { ok: false, reason: "invalid", ...refusal("refuseLayoutTooLarge", { kb: Math.round(MAX_LAYOUT_BYTES / 1024) }) };
+      next = readLayout(layout) ?? {};
+    }
+    const before = this.sharedLayout ?? {};
+    const byId = new Map([...this.groups.values()].map((group) => [group.id, group]));
+    const after: PanelLayout = {};
+    for (const id of new Set([...Object.keys(before), ...Object.keys(next)])) {
+      const group = byId.get(id);
+      const seen = group !== undefined && visible(scope, group.name);
+      // A group this operator cannot see keeps what it had: their layout never mentions it.
+      if (!seen) {
+        if (before[id] !== undefined) after[id] = before[id] as GroupLayout;
+        else if (group === undefined) return { ok: false, reason: "invalid", ...refusal("refuseLayoutGroup", { group: id }) };
+        continue;
+      }
+      if (!sameJson(before[id] ?? null, next[id] ?? null) && !canEdit(scope, group.name)) return { ok: false, reason: "not-allowed", ...refusal("refuseLayoutNotAllowed", { group: group.options.title ?? group.name }) };
+      if (next[id] !== undefined) after[id] = next[id] as GroupLayout;
+    }
+    const kept = Object.keys(after).length === 0 ? undefined : after;
+    this.sharedLayout = kept;
+    this.saveToStore(LAYOUT_KEY, (kept ?? null) as unknown as JsonValue, "the layout saved for everybody");
+    const record = this.log.record({ kind: "layout", target: "layout", label: "Layout", by, at: this.clock.now(), ok: true, origin: this.origin, outcome: kept === undefined ? "Put back the layout in code." : `Arranged ${Object.keys(kept).length === 1 ? "one group" : `${Object.keys(kept).length} groups`} for everybody.`, ...(why.reason === undefined ? {} : { reason: why.reason }) });
+    this.replicas.layout((kept ?? null) as unknown as JsonValue, record);
+    this.structureChanged();
+    this.version += 1;
+    return { ok: true };
   }
 
   /** Recent operator changes, oldest first, each saying whether it can still be undone. */
@@ -564,6 +715,7 @@ export class AdminPanel implements ValueOwner {
     const scope: PanelScope = options.groups === undefined ? READ_ONLY_SCOPE : { ...READ_ONLY_SCOPE, groups: new Set(options.groups) };
     const bootstrap = snapshot ? { schema: this.schema(scope), state: this.state(scope) } : undefined;
     return renderFragment(bootstrap, this.theme, {
+      themes: this.offeredThemes(),
       api: options.api,
       scheme: this.colorScheme,
       title: this.title,
@@ -598,6 +750,7 @@ export class AdminPanel implements ValueOwner {
       if (items.length === 0) continue;
       const schema: GroupSchema = { id: group.id, title: group.options.title ?? group.name, layout: group.options.layout ?? "grid", items };
       if (group.options.description !== undefined) schema.description = group.options.description;
+      if (group.options.grid !== undefined) schema.grid = { ...this.grid, ...(checkGrid(group.options.grid) as Partial<GridShape>) };
       groups.push(schema);
     }
     const schema: PanelSchema = {
@@ -605,14 +758,25 @@ export class AdminPanel implements ValueOwner {
       version: VERSION,
       structure: this.structure,
       theme: { name: this.theme.name, scheme: this.colorScheme },
+      grid: { ...this.grid },
       pollMs: this.pollIntervalMs,
       controls: { edit: anyAllowed(scope.edit), actions: anyAllowed(scope.actions) },
       restrictions: [...scope.restrictions],
       groups,
       locale: this.locale,
+      locales: Object.keys(LOCALES),
     };
     if (this.instance !== undefined) schema.instance = this.instance;
+    const offered = this.offeredThemes();
+    if (offered.length > 1) schema.theme.offered = offered.map((theme) => ({ name: theme.name, label: theme.label }));
+    // Only the groups this viewer is shown: a layout says what is in the others by naming cards.
+    const shown = new Set(groups.map((group) => group.id));
+    const layout = Object.fromEntries(Object.entries(this.sharedLayout ?? {}).filter(([id]) => shown.has(id)));
+    if (Object.keys(layout).length > 0) schema.layout = layout;
+    if (schema.controls.edit) schema.layoutWritable = true;
     if (this.messages !== undefined) schema.messages = { ...this.messages };
+    // The page's bundle carries English alone; another language travels with the schema that asks for it.
+    if (this.locale !== "en" && this.locale !== "auto") schema.translations = { ...(LOCALES[this.locale] as Record<string, string>) };
     return schema;
   }
 
@@ -637,8 +801,8 @@ export class AdminPanel implements ValueOwner {
       if (feedAfter === undefined || entries.length > 0 || feed.dropped > 0) feeds[feed.id] = { entries, dropped: feed.dropped, total: feed.total };
     }
     const pending = this.pending().filter((change) => {
-      const value = this.values.get(change.target);
-      return value !== undefined && visible(scope, value.group);
+      const group = change.kind === "action" ? this.actions.get(change.target)?.group : change.kind === "profile" ? this.profiles.get(change.target)?.group : this.values.get(change.target)?.group;
+      return group !== undefined && visible(scope, group);
     });
     const activeProfiles: string[] = [];
     for (const profile of this.profiles.values()) if (visible(scope, profile.group) && profileActive(profile, (value) => this.read(value))) activeProfiles.push(profile.id);
@@ -660,35 +824,31 @@ export class AdminPanel implements ValueOwner {
       activeProfiles,
       marks: this.charts.marks(scope, now, this.log.list()),
       actionStates,
+      ...this.profileSchedulesFor(scope),
     };
   }
 
   /**
    * An operator's change, attributed. Validation is the same as for code; the outcome says what went
    * wrong in a sentence. With `revertAfterMs`, the value returns to what it was once that has passed;
-   * with `at`, the change waits for that time instead of applying now. A value declared with
-   * `approval` becomes a proposal. `validateAsync` is not run here: a listener runs it first, through
-   * `checkAsync`, and so should any caller whose values declare one.
+   * with `at`, the change waits for that time; with `repeat`, it happens by that rule. A value
+   * declared with `approval` becomes a proposal. `validateAsync` is not run here: a listener runs it
+   * first, through `checkAsync`, and so should any caller whose values declare one.
    */
-  edit(id: string, candidate: unknown, by: string, scope: PanelScope, options: { revertAfterMs?: number | undefined; at?: number | undefined } = {}): EditOutcome {
+  edit(id: string, candidate: unknown, by: string, scope: PanelScope, options: ChangeOptions = {}): EditOutcome {
     const value = this.values.get(id);
-    if (value === undefined || !visible(scope, value.group)) return { ok: false, reason: "not-found", message: `there is no value "${id}" on this panel` };
-    if (!value.editable) return { ok: false, reason: "not-editable", message: `${value.label} is shown, not modifiable` };
-    if (!canEdit(scope, value.group)) return { ok: false, reason: "not-allowed", message: `editing ${value.label} is not allowed on this listener` };
+    if (value === undefined || !visible(scope, value.group)) return { ok: false, reason: "not-found", ...refusal("refuseNoValue", { id }) };
+    if (!value.editable) return { ok: false, reason: "not-editable", ...refusal("refuseNotModifiable", { label: value.label }) };
+    if (!canEdit(scope, value.group)) return { ok: false, reason: "not-allowed", ...refusal("refuseEditOff", { label: value.label }) };
     const condition = conditionOf(value.definition.visibleWhen, value.definition.disabledWhen);
-    if (condition.hidden === true) return { ok: false, reason: "not-allowed", message: `${value.label} is not offered right now` };
-    if (condition.disabled !== undefined) return { ok: false, reason: "not-allowed", message: `${value.label} cannot be changed right now: ${condition.disabled}` };
-    const { revertAfterMs, at } = options;
-    if (revertAfterMs !== undefined) {
-      if (!value.definition.timed) return { ok: false, reason: "invalid", message: `${value.label} does not take timed changes` };
-      if (!Number.isFinite(revertAfterMs) || revertAfterMs < 1000 || revertAfterMs > MAX_REVERT_MS) return { ok: false, reason: "invalid", message: "a timed change reverts after 1 second to 7 days" };
-    }
-    if (at !== undefined) {
-      const now = this.clock.now();
-      if (!Number.isFinite(at) || at <= now) return { ok: false, reason: "invalid", message: "a scheduled change needs a time in the future" };
-      if (at - now > MAX_SCHEDULE_AHEAD_MS) return { ok: false, reason: "invalid", message: "a change can be scheduled at most 30 days ahead" };
-      if (this.schedule.size >= MAX_SCHEDULED) return { ok: false, reason: "conflict", message: `${MAX_SCHEDULED} changes are already scheduled; cancel some first` };
-    }
+    if (condition.hidden === true) return { ok: false, reason: "not-allowed", ...refusal("refuseNotOffered", { label: value.label }) };
+    if (condition.disabled !== undefined) return { ok: false, reason: "not-allowed", ...refusal("refuseDisabled", { label: value.label, reason: condition.disabled }) };
+    const { revertAfterMs } = options;
+    if (revertAfterMs !== undefined && !value.definition.timed) return { ok: false, reason: "invalid", ...refusal("refuseNotTimed", { label: value.label }) };
+    const when = this.checkWhen(options, value.definition.approval);
+    if (!when.ok) return when;
+    const why = checkReason(options.reason, value.definition.reasonRequired, value.label);
+    if (!why.ok) return why;
     try {
       value.check(candidate);
     } catch (error) {
@@ -696,14 +856,16 @@ export class AdminPanel implements ValueOwner {
       throw error;
     }
     if (value.definition.approval) {
-      const entry = this.approvals.propose(value, candidate, by, { revertAfterMs, applyAt: at });
-      this.log.record({ kind: "approval", target: value.id, label: value.label, by, at: this.clock.now(), ok: true, outcome: "Proposed; waiting for a second operator.", ...(entry.to === undefined ? {} : { to: entry.to }) });
-      this.version += 1;
-      const { candidate: _candidate, revertAfterMs: _revert, applyAt: _applyAt, ...pending } = entry;
+      const pending = this.propose({ kind: "value", id: value.id, label: value.label, sensitive: value.definition.sensitive }, candidate, by, { revertAfterMs, applyAt: when.at, reason: why.reason });
       return { ok: true, pending };
     }
-    if (at !== undefined) return this.scheduleChange(value, candidate, at, by);
-    return this.apply(value, candidate, by, "edit", revertAfterMs);
+    if (when.at !== undefined || when.repeat !== undefined) {
+      this.scheduleTarget({ kind: "scheduled", target: "value", targetId: value.id, to: candidate, at: when.at ?? nextRun(when.repeat as RepeatRule, this.clock.now()), by, reason: why.reason, repeat: when.repeat, revertAfterMs }, value.label, value.definition.sensitive ? undefined : toJson(candidate));
+      this.version += 1;
+      value.version = this.version;
+      return { ok: true, value: this.wire(value, this.clock.now()) };
+    }
+    return this.apply(value, candidate, by, "edit", revertAfterMs, why.reason);
   }
 
   /**
@@ -730,66 +892,199 @@ export class AdminPanel implements ValueOwner {
   candidatesFor(kind: "pending" | "profile" | "undo", id: string): Array<[string, unknown]> {
     if (kind === "pending") {
       const entry = this.approvals.get(id);
-      return entry === undefined ? [] : [[entry.target, entry.candidate]];
+      if (entry === undefined || entry.kind === "action") return [];
+      return entry.kind === "profile" ? this.candidatesFor("profile", entry.target) : [[entry.target, entry.candidate]];
     }
     if (kind === "profile") return (this.profiles.get(id)?.settings ?? []).map(([value, to]) => [value.id, to]);
     const record = this.log.find(Number(id));
-    return record === undefined ? [] : [[record.target, record.from]];
+    if (record === undefined) return [];
+    if (this.isMany(record)) return Object.entries((record.from ?? {}) as Record<string, unknown>);
+    return [[record.target, record.from]];
   }
 
-  /** Approves a proposal. The operator who proposed it cannot approve it. */
-  approve(pendingId: string, by: string, scope: PanelScope): EditOutcome {
+  /** What kind of proposal an id names, for a caller that answers them differently. */
+  pendingKind(pendingId: string): "value" | "action" | "profile" | undefined {
+    return this.approvals.get(pendingId)?.kind;
+  }
+
+  /**
+   * Approves a proposal: a value's change is applied, a profile applied, an action run with the input
+   * it was proposed with. The operator who proposed it cannot approve it.
+   */
+  async approve(pendingId: string, by: string, scope: PanelScope): Promise<EditOutcome | ActionOutcome> {
     const pending = this.approvals.get(pendingId);
-    const value = pending === undefined ? undefined : this.values.get(pending.target);
-    if (pending === undefined || value === undefined || !visible(scope, value.group)) return { ok: false, reason: "not-found", message: `there is no pending change "${pendingId}"; it may have lapsed or been decided` };
-    if (!canEdit(scope, value.group)) return { ok: false, reason: "not-allowed", message: `approving changes to ${value.label} is not allowed on this listener` };
-    if (pending.by === by) return { ok: false, reason: "not-allowed", message: `${by} proposed this change, so somebody else has to approve it` };
-    this.approvals.take(pendingId);
+    const allowed = pending === undefined ? undefined : this.decidable(pending, scope, "approve");
+    if (pending === undefined || allowed === undefined) return { ok: false, reason: "not-found", ...refusal("refuseNoPending", { id: pendingId }) };
+    if (!allowed.ok) return allowed;
+    if (operatorOf(pending.by) === operatorOf(by)) return { ok: false, reason: "not-allowed", ...refusal("refuseOwnProposal", { by }) };
+    if (!(await this.replicas.claimed(`pending:${pendingId}`, APPROVAL_TTL_MS))) return { ok: false, reason: "not-found", ...refusal("refuseNoPending", { id: pendingId }) };
+    this.decided(pendingId);
     const approvedBy = `${pending.by}, approved by ${by}`;
-    if (pending.applyAt !== undefined && pending.applyAt > this.clock.now()) return this.scheduleChange(value, pending.candidate, pending.applyAt, approvedBy);
-    return this.apply(value, pending.candidate, approvedBy, "approval", pending.revertAfterMs);
+    const later = pending.applyAt !== undefined && pending.applyAt > this.clock.now() ? pending.applyAt : undefined;
+    if (pending.kind === "action") {
+      const action = this.actions.get(pending.target) as PanelAction;
+      return this.execute(action, (pending.candidate ?? {}) as Record<string, JsonValue>, approvedBy, pending.reason);
+    }
+    if (pending.kind === "profile") {
+      const profile = this.profiles.get(pending.target) as ProfileEntry;
+      if (later !== undefined) {
+        this.scheduleTarget({ kind: "scheduled", target: "profile", targetId: profile.id, to: null, at: later, by: approvedBy, reason: pending.reason, revertAfterMs: pending.revertAfterMs }, profile.label, undefined);
+        return { ok: true, value: this.wire(profile.settings[0]?.[0] as PanelValue<unknown>, this.clock.now()) };
+      }
+      return this.applyMany(profile.settings, approvedBy, scope, { kind: "profile", target: profile.id, label: profile.label }, { reason: pending.reason, revertAfterMs: pending.revertAfterMs });
+    }
+    const value = this.values.get(pending.target) as PanelValue<unknown>;
+    if (later !== undefined) {
+      this.scheduleTarget({ kind: "scheduled", target: "value", targetId: value.id, to: pending.candidate, at: later, by: approvedBy, reason: pending.reason, revertAfterMs: pending.revertAfterMs }, value.label, value.definition.sensitive ? undefined : toJson(pending.candidate));
+      this.version += 1;
+      value.version = this.version;
+      return { ok: true, value: this.wire(value, this.clock.now()) };
+    }
+    return this.apply(value, pending.candidate, approvedBy, "approval", pending.revertAfterMs, pending.reason);
   }
 
-  /** Withdraws or turns down a proposal. Anyone who may edit the value may. */
-  reject(pendingId: string, by: string, scope: PanelScope): EditOutcome {
+  /** Withdraws or turns down a proposal. Anyone who may make the change may. */
+  async reject(pendingId: string, by: string, scope: PanelScope, options: { reason?: string | undefined } = {}): Promise<EditOutcome> {
     const pending = this.approvals.get(pendingId);
-    const value = pending === undefined ? undefined : this.values.get(pending.target);
-    if (pending === undefined || value === undefined || !visible(scope, value.group)) return { ok: false, reason: "not-found", message: `there is no pending change "${pendingId}"` };
-    if (!canEdit(scope, value.group)) return { ok: false, reason: "not-allowed", message: `deciding changes to ${value.label} is not allowed on this listener` };
-    this.approvals.take(pendingId);
-    this.log.record({ kind: "approval", target: value.id, label: value.label, by, at: this.clock.now(), ok: false, outcome: `Turned down ${pending.by}'s change.` });
+    const allowed = pending === undefined ? undefined : this.decidable(pending, scope, "decide");
+    if (pending === undefined || allowed === undefined) return { ok: false, reason: "not-found", ...refusal("refuseNoPending", { id: pendingId }) };
+    if (!allowed.ok) return allowed;
+    const why = checkReason(options.reason, false, pending.label);
+    if (!why.ok) return why;
+    if (!(await this.replicas.claimed(`pending:${pendingId}`, APPROVAL_TTL_MS))) return { ok: false, reason: "not-found", ...refusal("refuseNoPending", { id: pendingId }) };
+    this.decided(pendingId);
+    this.log.record({ kind: "approval", target: pending.target, label: pending.label, by, at: this.clock.now(), ok: false, outcome: `Turned down ${pending.by}'s change.`, ...(why.reason === undefined ? {} : { reason: why.reason }) });
     this.version += 1;
-    return { ok: true, value: this.wire(value, this.clock.now()) };
+    return { ok: true, value: allowed.wire };
   }
 
-  /** Cancels a scheduled change before its time. */
+  /** Cancels a scheduled or repeating change before its (next) time. */
   cancelScheduled(entryId: string, by: string, scope: PanelScope): EditOutcome {
     const entry = this.schedule.get(entryId);
-    const value = entry === undefined ? undefined : this.values.get(entry.valueId);
-    if (entry === undefined || entry.kind !== "scheduled" || value === undefined || !visible(scope, value.group)) return { ok: false, reason: "not-found", message: `there is no scheduled change "${entryId}"; it may have happened already` };
-    if (!canEdit(scope, value.group)) return { ok: false, reason: "not-allowed", message: `cancelling changes to ${value.label} is not allowed on this listener` };
+    const target = entry === undefined || entry.kind !== "scheduled" ? undefined : this.scheduleTargetOf(entry, scope);
+    if (entry === undefined || target === undefined) return { ok: false, reason: "not-found", ...refusal("refuseNoSchedule", { id: entryId }) };
+    if (!target.writable) return { ok: false, reason: "not-allowed", ...refusal("refuseCancelOff", { label: target.label }) };
     this.schedule.cancel(entryId);
-    this.log.record({ kind: "scheduled", target: value.id, label: value.label, by, at: this.clock.now(), ok: false, outcome: `Cancelled the change ${entry.by} scheduled for ${new Date(entry.at).toISOString()}.` });
+    this.log.record({ kind: "scheduled", target: entry.targetId, label: target.label, by, at: this.clock.now(), ok: false, outcome: entry.repeat === undefined ? `Cancelled the change ${entry.by} scheduled for ${new Date(entry.at).toISOString()}.` : `Cancelled the change ${entry.by} scheduled ${describeRepeat(entry.repeat)}.` });
     this.version += 1;
-    value.version = this.version;
-    return { ok: true, value: this.wire(value, this.clock.now()) };
+    if (target.value !== undefined) target.value.version = this.version;
+    return { ok: true, value: this.wire(target.value ?? target.first, this.clock.now()) };
   }
 
-  /** Undoes an edit by writing back what it replaced, through the same checks as any edit. */
-  undo(changeId: number, by: string, scope: PanelScope): EditOutcome {
+  /** Undoes a change by writing back what it replaced, through the same checks as any edit: one value, or all of a profile's or an import's. */
+  undo(changeId: number, by: string, scope: PanelScope, options: { reason?: string | undefined } = {}): EditOutcome {
     const record = this.log.find(changeId);
-    if (record === undefined) return { ok: false, reason: "not-found", message: `there is no change ${changeId} in the recent history` };
+    if (record === undefined) return { ok: false, reason: "not-found", ...refusal("refuseNoChange", { id: changeId }) };
+    if (this.isMany(record)) {
+      const pairs = Object.keys((record.to ?? {}) as Record<string, JsonValue>).map((id) => [this.values.get(id), ((record.from ?? {}) as Record<string, unknown>)[id]] as const);
+      if (pairs.some(([value]) => value === undefined || !visible(scope, value.group))) return { ok: false, reason: "not-found", ...refusal("refuseNoChange", { id: changeId }) };
+      if (!this.revertible(record)) return { ok: false, reason: "conflict", ...refusal("refuseUndoChanged", { id: changeId, label: record.label }) };
+      const why = checkReason(options.reason, false, record.label);
+      if (!why.ok) return why;
+      return this.applyMany(pairs as ReadonlyArray<readonly [PanelValue<unknown>, unknown]>, by, scope, { kind: "revert", target: record.target, label: `Undid: ${record.label}` }, { reason: why.reason });
+    }
     const value = this.values.get(record.target);
-    if (value === undefined || !visible(scope, value.group)) return { ok: false, reason: "not-found", message: `there is no change ${changeId} in the recent history` };
-    if (!this.revertible(record)) return { ok: false, reason: "conflict", message: `change ${changeId} cannot be undone: ${record.from === undefined ? "its old value was never recorded" : `${value.label} has changed since, and undoing would overwrite that`}` };
-    return this.edit(value.id, record.from, by, scope);
+    if (value === undefined || !visible(scope, value.group)) return { ok: false, reason: "not-found", ...refusal("refuseNoChange", { id: changeId }) };
+    if (!this.revertible(record)) return { ok: false, reason: "conflict", ...(record.from === undefined ? refusal("refuseUndoUnrecorded", { id: changeId }) : refusal("refuseUndoChanged", { id: changeId, label: value.label })) };
+    return this.edit(value.id, record.from, by, scope, { reason: options.reason });
   }
 
-  /** Applies a profile whole, or nothing of it. */
-  applyProfile(id: string, by: string, scope: PanelScope): EditOutcome {
+  /** Applies a profile whole, or nothing of it: now, for a while, at a time, or by a rule. A profile declared with `approval` becomes a proposal. */
+  applyProfile(id: string, by: string, scope: PanelScope, options: ChangeOptions = {}): EditOutcome {
     const profile = this.profiles.get(id);
-    if (profile === undefined || !visible(scope, profile.group)) return { ok: false, reason: "not-found", message: `there is no profile "${id}" on this panel` };
-    return this.applyMany(profile.settings, by, scope, { kind: "profile", target: id, label: profile.label });
+    if (profile === undefined || !visible(scope, profile.group)) return { ok: false, reason: "not-found", ...refusal("refuseNoProfile", { id }) };
+    const blocked = profile.settings.find(([value]) => !visible(scope, value.group) || !canEdit(scope, value.group));
+    if (blocked !== undefined) return { ok: false, reason: "not-allowed", ...refusal("refuseManyNotAllowed", { what: profile.label, label: blocked[0].label }) };
+    const { revertAfterMs } = options;
+    if (revertAfterMs !== undefined) {
+      if (!Number.isFinite(revertAfterMs) || revertAfterMs < 1000 || revertAfterMs > MAX_REVERT_MS) return { ok: false, reason: "invalid", ...refusal("refuseRevertRange") };
+      const sensitive = profile.settings.find(([value]) => value.definition.sensitive);
+      if (sensitive !== undefined) return { ok: false, reason: "invalid", ...refusal("refuseProfileTimedSensitive", { label: profile.label, value: sensitive[0].label }) };
+    }
+    const when = this.checkWhen(options, profile.approval);
+    if (!when.ok) return when;
+    const why = checkReason(options.reason, profile.reasonRequired, profile.label);
+    if (!why.ok) return why;
+    const first = profile.settings[0]?.[0] as PanelValue<unknown>;
+    if (profile.approval) {
+      const pending = this.propose({ kind: "profile", id: profile.id, label: profile.label, sensitive: true }, undefined, by, { revertAfterMs, applyAt: when.at, reason: why.reason });
+      return { ok: true, pending };
+    }
+    if (when.at !== undefined || when.repeat !== undefined) {
+      this.scheduleTarget({ kind: "scheduled", target: "profile", targetId: profile.id, to: null, at: when.at ?? nextRun(when.repeat as RepeatRule, this.clock.now()), by, reason: why.reason, repeat: when.repeat, revertAfterMs }, profile.label, undefined);
+      return { ok: true, value: this.wire(first, this.clock.now()) };
+    }
+    return this.applyMany(profile.settings, by, scope, { kind: "profile", target: id, label: profile.label }, { reason: why.reason, revertAfterMs });
+  }
+
+  /** Checks when a change happens: at most one of `at` and `repeat`, each within bounds. */
+  private checkWhen(options: ChangeOptions, approval: boolean): { ok: true; at: number | undefined; repeat: RepeatRule | undefined } | { ok: false; reason: "invalid" | "conflict"; message: string; refusal: import("./errors.js").Refusal } {
+    const { at, revertAfterMs } = options;
+    if (revertAfterMs !== undefined && (!Number.isFinite(revertAfterMs) || revertAfterMs < 1000 || revertAfterMs > MAX_REVERT_MS)) return { ok: false, reason: "invalid", ...refusal("refuseRevertRange") };
+    let repeat: RepeatRule | undefined;
+    if (options.repeat !== undefined) {
+      if (at !== undefined) return { ok: false, reason: "invalid", ...refusal("refuseRepeatAndAt") };
+      if (approval) return { ok: false, reason: "invalid", ...refusal("refuseRepeatApproval") };
+      try {
+        repeat = checkRepeat(options.repeat);
+      } catch (error) {
+        return { ok: false, reason: "invalid", ...refusal("refuseRepeat", { detail: message(error) }) };
+      }
+    }
+    if (at !== undefined) {
+      const now = this.clock.now();
+      if (!Number.isFinite(at) || at <= now) return { ok: false, reason: "invalid", ...refusal("refuseScheduleFuture") };
+      if (at - now > MAX_SCHEDULE_AHEAD_MS) return { ok: false, reason: "invalid", ...refusal("refuseScheduleAhead") };
+    }
+    if ((at !== undefined || repeat !== undefined) && this.schedule.size >= MAX_SCHEDULED) return { ok: false, reason: "conflict", ...refusal("refuseScheduleFull", { count: MAX_SCHEDULED }) };
+    return { ok: true, at, repeat };
+  }
+
+  /** Makes a proposal and records it. */
+  private propose(target: import("./panel/approvals.js").ProposalTarget, candidate: unknown, by: string, options: { revertAfterMs?: number | undefined; applyAt?: number | undefined; reason?: string | undefined }): PendingChange {
+    const entry = this.approvals.propose(target, candidate, by, options);
+    this.log.record({ kind: "approval", target: target.id, label: target.label, by, at: this.clock.now(), ok: true, outcome: "Proposed; waiting for a second operator.", ...(entry.to === undefined ? {} : { to: entry.to }), ...(options.reason === undefined ? {} : { reason: options.reason }) });
+    this.version += 1;
+    this.replicas.proposal(entry, false);
+    const { candidate: _candidate, revertAfterMs: _revert, kind, ...pending } = entry;
+    return kind === "value" ? pending : { ...pending, kind };
+  }
+
+  /** A proposal was decided here: it is removed everywhere. */
+  private decided(pendingId: string): void {
+    const entry = this.approvals.take(pendingId);
+    if (entry !== undefined) this.replicas.proposal(entry, true);
+  }
+
+  /** Whether a scope may decide a proposal, with the wire value its answer carries. */
+  private decidable(pending: import("./panel/approvals.js").PendingEntry, scope: PanelScope, verb: "approve" | "decide"): ({ ok: true; wire: WireValue } | { ok: false; reason: "not-allowed"; message: string; refusal: import("./errors.js").Refusal }) | undefined {
+    const refused = { ok: false as const, reason: "not-allowed" as const, ...refusal(verb === "approve" ? "refuseApproveOff" : "refuseDecideOff", { label: pending.label }) };
+    const now = this.clock.now();
+    if (pending.kind === "action") {
+      const action = this.actions.get(pending.target);
+      if (action === undefined || !visible(scope, action.group)) return undefined;
+      return canRun(scope, action.group) ? { ok: true, wire: { id: action.id, value: null, at: now, version: this.version } } : refused;
+    }
+    if (pending.kind === "profile") {
+      const profile = this.profiles.get(pending.target);
+      if (profile === undefined || !visible(scope, profile.group)) return undefined;
+      return profileWritable(profile, scope) ? { ok: true, wire: this.wire(profile.settings[0]?.[0] as PanelValue<unknown>, now) } : refused;
+    }
+    const value = this.values.get(pending.target);
+    if (value === undefined || !visible(scope, value.group)) return undefined;
+    return canEdit(scope, value.group) ? { ok: true, wire: this.wire(value, now) } : refused;
+  }
+
+  /** What a schedule entry changes, as a scope sees it; undefined when the scope cannot see it. */
+  private scheduleTargetOf(entry: ScheduleEntry, scope: PanelScope): { label: string; writable: boolean; value: PanelValue<unknown> | undefined; first: PanelValue<unknown> } | undefined {
+    if (entry.target === "profile") {
+      const profile = this.profiles.get(entry.targetId);
+      if (profile === undefined || !visible(scope, profile.group)) return undefined;
+      return { label: profile.label, writable: profileWritable(profile, scope), value: undefined, first: profile.settings[0]?.[0] as PanelValue<unknown> };
+    }
+    const value = this.values.get(entry.targetId);
+    if (value === undefined || !visible(scope, value.group)) return undefined;
+    return { label: value.label, writable: canEdit(scope, value.group), value, first: value };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -798,53 +1093,26 @@ export class AdminPanel implements ValueOwner {
 
   /** Every modifiable value a scope shows, by id, as JSON. Sensitive values are left out: an export is a file people pass around. */
   exportSettings(scope: PanelScope): Record<string, JsonValue> {
-    const out: Record<string, JsonValue> = {};
-    for (const value of this.values.values()) {
-      if (!value.editable || value.definition.sensitive || !visible(scope, value.group)) continue;
-      out[value.id] = toJson(this.read(value));
-    }
-    return out;
+    return exportSettings(this.values.values(), scope, (value) => this.read(value));
   }
 
   /** What importing `settings` would change, value by value, with the reason any would be refused. Changes nothing. */
   diffSettings(settings: unknown, scope: PanelScope): { diff: SettingDiff[]; unknown: string[] } {
-    if (settings === null || typeof settings !== "object" || Array.isArray(settings)) return { diff: [], unknown: [] };
-    const diff: SettingDiff[] = [];
-    const unknown: string[] = [];
-    for (const [id, to] of Object.entries(settings as Record<string, unknown>)) {
-      const value = this.values.get(id);
-      if (value === undefined || !value.editable || value.definition.sensitive || !visible(scope, value.group)) {
-        unknown.push(id);
-        continue;
-      }
-      const from = toJson(this.read(value));
-      const encoded = toJson(to);
-      if (JSON.stringify(from) === JSON.stringify(encoded)) continue;
-      const line: SettingDiff = { id, label: value.label, from, to: encoded };
-      if (!canEdit(scope, value.group)) line.error = `${value.label} may not be edited on this listener`;
-      else if (value.definition.approval) line.error = `${value.label} needs a second operator's approval, which an import would skip`;
-      else {
-        try {
-          value.check(to);
-        } catch (error) {
-          line.error = message(error);
-        }
-      }
-      diff.push(line);
-    }
-    return { diff, unknown };
+    return diffSettings(this.values, settings, scope, (value) => this.read(value));
   }
 
   /** Applies imported settings as one change, whole or not at all. Ids this panel does not have are refused, not skipped. */
-  importSettings(settings: unknown, by: string, scope: PanelScope): EditOutcome & { changed?: number } {
-    if (settings === null || typeof settings !== "object" || Array.isArray(settings)) return { ok: false, reason: "invalid", message: "settings must be an object of values by id" };
+  importSettings(settings: unknown, by: string, scope: PanelScope, options: { reason?: string | undefined } = {}): EditOutcome & { changed?: number } {
+    if (settings === null || typeof settings !== "object" || Array.isArray(settings)) return { ok: false, reason: "invalid", ...refusal("refuseSettingsShape") };
     const { diff, unknown } = this.diffSettings(settings, scope);
-    if (unknown.length > 0) return { ok: false, reason: "invalid", message: `nothing was imported: ${unknown.map((id) => `"${id}"`).join(", ")} ${unknown.length === 1 ? "is" : "are"} not a setting this listener can import` };
+    if (unknown.length > 0) return { ok: false, reason: "invalid", ...refusal("refuseNotImportable", { ids: unknown.map((id) => `"${id}"`).join(", ") }) };
     const refused = diff.find((line) => line.error !== undefined);
-    if (refused !== undefined) return { ok: false, reason: "invalid", message: `nothing was imported: ${refused.error}` };
+    if (refused !== undefined) return { ok: false, reason: "invalid", ...refusal("refuseNotImported", { reason: refused.error ?? "" }) };
     if (diff.length === 0) return { ok: true, value: { id: "", value: null, at: this.clock.now(), version: this.version }, changed: 0 };
     const pairs = diff.map((line) => [this.values.get(line.id) as PanelValue<unknown>, (settings as Record<string, unknown>)[line.id]] as [PanelValue<unknown>, unknown]);
-    const outcome = this.applyMany(pairs, by, scope, { kind: "import", target: "settings", label: `Imported ${diff.length} setting${diff.length === 1 ? "" : "s"}` });
+    const why = checkReason(options.reason, false, "an import");
+    if (!why.ok) return why;
+    const outcome = this.applyMany(pairs, by, scope, { kind: "import", target: "settings", label: `Imported ${diff.length} setting${diff.length === 1 ? "" : "s"}` }, { reason: why.reason });
     return { ...outcome, changed: diff.length };
   }
 
@@ -852,34 +1120,43 @@ export class AdminPanel implements ValueOwner {
   // Actions and tables
   // -------------------------------------------------------------------------------------------
 
-  /** Runs an action for an operator, within its deadline. Never rejects. */
-  async run(id: string, by: string, scope: PanelScope, rawInput?: unknown): Promise<ActionOutcome> {
+  /** Runs an action for an operator, within its deadline, or proposes it when it needs approval. Never rejects. */
+  async run(id: string, by: string, scope: PanelScope, rawInput?: unknown, options: { reason?: string | undefined } = {}): Promise<ActionOutcome> {
     const action = this.actions.get(id);
-    if (action === undefined || !visible(scope, action.group)) return { ok: false, reason: "not-found", message: `there is no action "${id}" on this panel` };
-    if (!canRun(scope, action.group)) return { ok: false, reason: "not-allowed", message: `running ${action.label} is not allowed on this listener` };
+    if (action === undefined || !visible(scope, action.group)) return { ok: false, reason: "not-found", ...refusal("refuseNoAction", { id }) };
+    if (!canRun(scope, action.group)) return { ok: false, reason: "not-allowed", ...refusal("refuseRunOff", { label: action.label }) };
     const condition = conditionOf(action.definition.visibleWhen, action.definition.disabledWhen);
-    if (condition.hidden === true) return { ok: false, reason: "not-allowed", message: `${action.label} is not offered right now` };
-    if (condition.disabled !== undefined) return { ok: false, reason: "not-allowed", message: `${action.label} cannot be run right now: ${condition.disabled}` };
+    if (condition.hidden === true) return { ok: false, reason: "not-allowed", ...refusal("refuseNotOffered", { label: action.label }) };
+    if (condition.disabled !== undefined) return { ok: false, reason: "not-allowed", ...refusal("refuseActionDisabled", { label: action.label, reason: condition.disabled }) };
     let input: Record<string, JsonValue> = {};
     const fields = this.inputs.get(id);
     try {
       if (fields !== undefined) input = checkInput(fields, rawInput);
-      else if (rawInput !== undefined && rawInput !== null && Object.keys(rawInput as object).length > 0) throw new ValueError(`${action.label} takes no input`);
+      else if (rawInput !== undefined && rawInput !== null && Object.keys(rawInput as object).length > 0) throw new ValueError(`${action.label} takes no input`, { key: "refuseNoInput", params: { label: action.label } });
     } catch (error) {
       if (error instanceof ValueError) return { ok: false, reason: "invalid", message: error.message, refusal: error.refusal };
       throw error;
     }
+    const why = checkReason(options.reason, action.definition.reasonRequired, action.label);
+    if (!why.ok) return why;
+    if (action.definition.approval) return { ok: true, pending: this.propose({ kind: "action", id: action.id, label: action.label, sensitive: false }, input, by, { reason: why.reason }) };
+    return this.execute(action, input, by, why.reason);
+  }
+
+  /** Runs an action that is allowed to run, within its deadline, and records it. */
+  private async execute(action: PanelAction, input: Record<string, JsonValue>, by: string, reason: string | undefined): Promise<ActionOutcome> {
+    const id = action.id;
     const controller = new AbortController();
     let outcome: ActionOutcome;
     try {
-      const result = await withDeadline(Promise.resolve().then(() => action.run({ by, signal: controller.signal, input })), action.definition.timeoutMs, `${action.label}`);
+      const result = await withDeadline(Promise.resolve().then(() => action.run({ by, signal: controller.signal, input, ...(reason === undefined ? {} : { reason }) })), action.definition.timeoutMs, `${action.label}`);
       outcome = { ok: true, message: typeof result === "string" && result !== "" ? result : `${action.label} finished.` };
     } catch (error) {
       controller.abort();
-      outcome = { ok: false, reason: "failed", message: `${action.label} failed: ${message(error)}` };
+      outcome = { ok: false, reason: "failed", ...refusal("refuseActionFailed", { label: action.label, detail: message(error) }) };
       this.onError(error, `the action "${id}"`);
     }
-    this.log.record({ kind: "action", target: id, label: action.label, by, at: this.clock.now(), ok: outcome.ok, outcome: outcome.message, ...(Object.keys(input).length > 0 ? { to: input } : {}) });
+    this.log.record({ kind: "action", target: id, label: action.label, by, at: this.clock.now(), ok: outcome.ok, outcome: outcome.ok && "message" in outcome ? outcome.message : outcome.ok ? "" : outcome.message, ...(Object.keys(input).length > 0 ? { to: input } : {}), ...(reason === undefined ? {} : { reason }) });
     return outcome;
   }
 
@@ -901,9 +1178,9 @@ export class AdminPanel implements ValueOwner {
   async runRowAction(tableId: string, actionId: string, rowId: string, by: string, scope: PanelScope): Promise<ActionOutcome> {
     const table = this.tables.get(tableId);
     const action = table?.rowActions.find((candidate) => candidate.id === actionId);
-    if (table === undefined || action === undefined || !visible(scope, table.group)) return { ok: false, reason: "not-found", message: `there is no row action "${actionId}" on table "${tableId}"` };
-    if (!canRun(scope, table.group)) return { ok: false, reason: "not-allowed", message: `running ${action.label} is not allowed on this listener` };
-    if (typeof rowId !== "string" || rowId === "" || rowId.length > 200) return { ok: false, reason: "invalid", message: "a row action needs the row's id" };
+    if (table === undefined || action === undefined || !visible(scope, table.group)) return { ok: false, reason: "not-found", ...refusal("refuseNoRowAction", { action: actionId, table: tableId }) };
+    if (!canRun(scope, table.group)) return { ok: false, reason: "not-allowed", ...refusal("refuseRunOff", { label: action.label }) };
+    if (typeof rowId !== "string" || rowId === "" || rowId.length > 200) return { ok: false, reason: "invalid", ...refusal("refuseRowId") };
     const controller = new AbortController();
     let outcome: ActionOutcome;
     try {
@@ -911,7 +1188,7 @@ export class AdminPanel implements ValueOwner {
       outcome = { ok: true, message: typeof result === "string" && result !== "" ? result : `${action.label} finished.` };
     } catch (error) {
       controller.abort();
-      outcome = { ok: false, reason: "failed", message: `${action.label} failed: ${message(error)}` };
+      outcome = { ok: false, reason: "failed", ...refusal("refuseActionFailed", { label: action.label, detail: message(error) }) };
       this.onError(error, `the row action "${tableId}/${actionId}"`);
     }
     this.log.record({ kind: "action", target: `${tableId}/${actionId}`, label: `${action.label} (${table.label}: ${rowId})`, by, at: this.clock.now(), ok: outcome.ok, outcome: outcome.message });
@@ -997,9 +1274,18 @@ export class AdminPanel implements ValueOwner {
     this.events.emit("error", { error, source });
   }
 
-  /** @internal Adds or refreshes a notice. */
-  notice(level: Notice["level"], id: string, text: string): void {
-    const notice: Notice = { id, level, message: text, at: this.clock.now() };
+  /**
+   * @internal Adds or refreshes a notice. The panel's own words are a message key and what fills it,
+   * so a page can say them in the viewer's language; `{ text }` is for words the panel did not write
+   * itself — an alert's sentence, which reads the same here, in the change log and in a webhook.
+   */
+  notice(level: Notice["level"], id: string, said: MessageKey | { text: string }, params: Record<string, string | number> = {}): void {
+    const keyed = typeof said === "string";
+    const notice: Notice = { id, level, message: keyed ? format(ENGLISH[said], params) : said.text, at: this.clock.now() };
+    if (keyed) {
+      notice.key = said;
+      notice.params = params;
+    }
     this.noticeLog.delete(id);
     this.noticeLog.set(id, notice);
     if (this.noticeLog.size > MAX_NOTICES) {
@@ -1030,7 +1316,7 @@ export class AdminPanel implements ValueOwner {
 
   /** @internal Reverts a value's timed change now, as its timer would. */
   fireRevert(value: PanelValue<unknown>): void {
-    const entry = this.schedule.revertFor(value.id);
+    const entry = this.schedule.revertFor("value", value.id);
     if (entry !== undefined) this.schedule.fire(entry.id);
   }
 
@@ -1048,11 +1334,7 @@ export class AdminPanel implements ValueOwner {
     else {
       this.unnamed += 1;
       id = `value-${this.unnamed}`;
-      this.notice(
-        "info",
-        "unnamed-values",
-        `${this.unnamed === 1 ? "One value has" : `${this.unnamed} values have`} no label, so the panel names them in order of declaration ("Value 1", "Value 2"). Those names change when declarations move; give each a label.`,
-      );
+      this.notice("info", "unnamed-values", this.unnamed === 1 ? "noticeUnnamedOne" : "noticeUnnamedMany", { count: this.unnamed });
     }
     const shown = checkTitle(label ?? `Value ${this.unnamed}`);
     if (this.values.has(id)) throw new AdminPanelConfigError(`two values have the id "${id}": the second would silently replace the first on the page. Give one of them its own id or label`);
@@ -1067,6 +1349,7 @@ export class AdminPanel implements ValueOwner {
     if (!Number.isFinite(validateTimeoutMs) || validateTimeoutMs <= 0) throw new AdminPanelConfigError(`"${shown}" has a validateTimeoutMs of ${validateTimeoutMs}; it is a positive number of milliseconds`);
     checkCondition(shown, "visibleWhen", options.visibleWhen);
     checkCondition(shown, "disabledWhen", options.disabledWhen);
+    checkReasonOption(shown, options.reason);
 
     const initial = readSafely(source);
     const kind = inferKind(initial, options);
@@ -1101,11 +1384,13 @@ export class AdminPanel implements ValueOwner {
       approval: options.approval === true,
       timed: editable && options.timed !== false,
       span: checkSpan(shown, options.span),
+      size: checkCardSize(shown, options.size),
       visibleWhen: options.visibleWhen,
       disabledWhen: options.disabledWhen,
       timeline: options.sensitive === true ? 0 : timeline,
       validateAsync: options.validateAsync as ValueDefinition["validateAsync"],
       validateTimeoutMs,
+      reasonRequired: options.reason === "required" || options.approval === true,
     };
     if (options.approval === true && !editable) throw new AdminPanelConfigError(`"${shown}" asks for approval but is not modifiable`);
     const group = this.ensureGroup(options.group ?? this.defaultGroup);
@@ -1126,18 +1411,18 @@ export class AdminPanel implements ValueOwner {
       this.alerts.add(value as PanelValue<unknown>, alert);
     }
     if (!definition.sensitive && looksSecret(id, shown)) {
-      this.notice("warning", `looks-secret-${id}`, `${shown} looks like it holds a secret but is not declared sensitive, so it is sent to every viewer. Declare it with sensitive: true if it is one.`);
+      this.notice("warning", `looks-secret-${id}`, "noticeLooksSecret", { label: shown });
     }
     if (this.stored !== undefined) {
       if (definition.persist) this.restoreOne(value as PanelValue<unknown>, this.stored);
-      this.schedule.restore(this.stored[SCHEDULE_KEY], value as PanelValue<unknown>);
+      this.schedule.restore(this.stored[SCHEDULE_KEY], "value", id);
     }
     this.structureChanged();
     return value;
   }
 
   /** @internal The one path an operator's change takes once it is allowed. */
-  private apply(value: PanelValue<unknown>, candidate: unknown, by: string, kind: ChangeRecord["kind"], revertAfterMs: number | undefined): EditOutcome {
+  private apply(value: PanelValue<unknown>, candidate: unknown, by: string, kind: ChangeRecord["kind"], revertAfterMs: number | undefined, reason?: string | undefined): EditOutcome {
     const previous = value.get();
     try {
       // `write` checks the constraints and the validator, the same as a write from code.
@@ -1147,7 +1432,7 @@ export class AdminPanel implements ValueOwner {
       throw error;
     }
     const definition = value.definition;
-    this.schedule.cancelRevert(value.id);
+    this.schedule.cancelRevert("value", value.id);
     const record = this.log.record({
       kind,
       target: value.id,
@@ -1157,26 +1442,28 @@ export class AdminPanel implements ValueOwner {
       ok: true,
       origin: this.origin,
       ...(definition.sensitive ? {} : { from: toJson(previous), to: toJson(candidate) }),
+      ...(reason === undefined ? {} : { reason }),
     });
     this.persist(value, candidate);
-    if (revertAfterMs !== undefined) this.schedule.add("revert", value, previous, this.clock.now() + revertAfterMs, by);
-    this.publish(value, candidate, record);
+    // Published before the revert entry, so a replica receiving both drops its own revert first and keeps this one.
+    this.replicas.change(value, candidate, record);
+    if (revertAfterMs !== undefined) this.schedule.add({ kind: "revert", target: "value", targetId: value.id, to: previous, at: this.clock.now() + revertAfterMs, by, reason });
     this.runOnChange(value, candidate, previous, by);
     return { ok: true, value: this.wire(value, this.clock.now()) };
   }
 
   /** Several values set in one step, checked first, recorded once: profiles and imports. */
-  private applyMany(settings: ReadonlyArray<readonly [PanelValue<unknown>, unknown]>, by: string, scope: PanelScope, record: { kind: "profile" | "import"; target: string; label: string }): EditOutcome {
+  private applyMany(settings: ReadonlyArray<readonly [PanelValue<unknown>, unknown]>, by: string, scope: PanelScope, record: { kind: "profile" | "import" | "revert"; target: string; label: string }, extra: { reason?: string | undefined; revertAfterMs?: number | undefined } = {}): EditOutcome {
     for (const [value] of settings) {
-      if (!visible(scope, value.group) || !canEdit(scope, value.group)) return { ok: false, reason: "not-allowed", message: `${record.label} sets ${value.label}, which this listener may not edit, so none of it was applied` };
+      if (!visible(scope, value.group) || !canEdit(scope, value.group)) return { ok: false, reason: "not-allowed", ...refusal("refuseManyNotAllowed", { what: record.label, label: value.label }) };
       const condition = conditionOf(value.definition.visibleWhen, value.definition.disabledWhen);
-      if (condition.disabled !== undefined) return { ok: false, reason: "not-allowed", message: `${record.label} was not applied: ${value.label} cannot be changed right now (${condition.disabled})` };
+      if (condition.disabled !== undefined) return { ok: false, reason: "not-allowed", ...refusal("refuseManyDisabled", { what: record.label, label: value.label, reason: condition.disabled }) };
     }
     // Checked first, all of them: half a profile is worse than none.
     try {
       for (const [value, to] of settings) value.check(to);
     } catch (error) {
-      if (error instanceof ValueError) return { ok: false, reason: "invalid", message: `${record.label} was not applied: ${error.message}` };
+      if (error instanceof ValueError) return { ok: false, reason: "invalid", ...refusal("refuseManyInvalid", { what: record.label, reason: error.message }) };
       throw error;
     }
     const from: Record<string, JsonValue> = {};
@@ -1188,36 +1475,65 @@ export class AdminPanel implements ValueOwner {
         to[value.id] = toJson(next);
       }
       previous.push(value.get());
-      this.schedule.cancelRevert(value.id);
+      this.schedule.cancelRevert("value", value.id);
       value.write(next, by);
       this.persist(value, next);
     }
-    const written = this.log.record({ ...record, by, at: this.clock.now(), ok: true, from, to, origin: this.origin, outcome: `Set ${settings.map(([value]) => value.label).join(", ")}.` });
+    if (record.kind !== "import") this.schedule.cancelRevert("profile", record.target);
+    const written = this.log.record({ ...record, by, at: this.clock.now(), ok: true, from, to, origin: this.origin, outcome: `Set ${settings.map(([value]) => value.label).join(", ")}.`, ...(extra.reason === undefined ? {} : { reason: extra.reason }) });
     settings.forEach(([value, next], index) => {
-      this.publish(value, next, { ...written, target: value.id, label: value.label, ...(value.definition.sensitive ? {} : { to: toJson(next) }) });
+      this.replicas.change(value, next, { ...written, target: value.id, label: value.label, ...(value.definition.sensitive ? {} : { to: toJson(next) }) });
       this.runOnChange(value, next, previous[index], by);
     });
+    if (extra.revertAfterMs !== undefined) {
+      const back: Record<string, unknown> = {};
+      settings.forEach(([value], index) => {
+        back[value.id] = previous[index];
+      });
+      this.schedule.add({ kind: "revert", target: "profile", targetId: record.target, to: back, at: this.clock.now() + extra.revertAfterMs, by, reason: extra.reason });
+    }
     const first = settings[0]?.[0] as PanelValue<unknown>;
     return { ok: true, value: this.wire(first, this.clock.now()) };
   }
 
-  private scheduleChange(value: PanelValue<unknown>, candidate: unknown, at: number, by: string): EditOutcome {
-    const entry = this.schedule.add("scheduled", value, candidate, at, by);
-    this.log.record({ kind: "scheduled", target: value.id, label: value.label, by, at: this.clock.now(), ok: true, outcome: `Scheduled for ${new Date(at).toISOString()}.`, ...(value.definition.sensitive ? {} : { to: toJson(candidate) }) });
-    this.version += 1;
-    value.version = this.version;
-    void entry;
-    return { ok: true, value: this.wire(value, this.clock.now()) };
+  /** Adds a scheduled or repeating change and records that it was planned. */
+  private scheduleTarget(entry: NewEntry, label: string, shown: JsonValue | undefined): ScheduleEntry {
+    const added = this.schedule.add(entry);
+    const when = entry.repeat === undefined ? `for ${new Date(entry.at).toISOString()}` : `${describeRepeat(entry.repeat)}, first at ${new Date(entry.at).toISOString()}`;
+    this.log.record({ kind: "scheduled", target: entry.targetId, label, by: entry.by, at: this.clock.now(), ok: true, outcome: `Scheduled ${when}.`, ...(shown === undefined ? {} : { to: shown }), ...(entry.reason === undefined ? {} : { reason: entry.reason }) });
+    return added;
   }
 
-  /** A timed revert or a scheduled change whose time has come. */
+  /** A timed revert, a scheduled change or a repeating change whose time has come. */
   private fireScheduled(entry: ScheduleEntry, late: boolean): void {
-    const value = this.values.get(entry.valueId);
-    if (value === undefined) return;
-    const by = entry.kind === "revert" ? `${entry.by} (timed change ended)` : `${entry.by} (scheduled)`;
-    const outcome = this.apply(value, entry.to, by, entry.kind === "revert" ? "revert" : "scheduled", undefined);
-    if (!outcome.ok) this.notice("warning", `${entry.kind}-${value.id}`, `${value.label} could not be ${entry.kind === "revert" ? "reverted" : "changed as scheduled"}: ${outcome.message}`);
-    else if (late) this.notice("info", `late-${entry.id}`, `${value.label} was ${entry.kind === "revert" ? "reverted" : "changed as scheduled"} late, on start: its time, ${new Date(entry.at).toISOString()}, passed while the process was not running.`);
+    const how = entry.kind === "revert" ? "(timed change ended)" : entry.repeat === undefined ? "(scheduled)" : "(repeating)";
+    const by = `${entry.by} ${how}`;
+    const kind = entry.kind === "revert" ? "revert" : "scheduled";
+    let label: string;
+    let outcome: EditOutcome;
+    if (entry.target === "profile") {
+      const profile = this.profiles.get(entry.targetId);
+      if (profile === undefined) return;
+      label = profile.label;
+      if (entry.kind === "revert") {
+        const back = (entry.to ?? {}) as Record<string, unknown>;
+        const pairs = profile.settings.filter(([value]) => Object.hasOwn(back, value.id)).map(([value]) => [value, back[value.id]] as const);
+        outcome = this.applyMany(pairs, by, INTERNAL, { kind: "revert", target: profile.id, label: `${profile.label} (timed change ended)` }, { reason: entry.reason });
+      } else outcome = this.applyMany(profile.settings, by, INTERNAL, { kind: "profile", target: profile.id, label: profile.label }, { reason: entry.reason, revertAfterMs: entry.revertAfterMs });
+    } else {
+      const value = this.values.get(entry.targetId);
+      if (value === undefined) return;
+      label = value.label;
+      outcome = this.apply(value, entry.to, by, kind, entry.revertAfterMs, entry.reason);
+    }
+    const reverting = entry.kind === "revert";
+    if (!outcome.ok) this.notice("warning", `${entry.kind}-${entry.targetId}`, reverting ? "noticeRevertFailed" : "noticeScheduledFailed", { label, reason: outcome.message });
+    else if (late) this.notice("info", `late-${entry.id}`, reverting ? "noticeRevertLate" : "noticeScheduledLate", { label, time: new Date(entry.at).toISOString() });
+  }
+
+  /** A change that set several values at once: a profile, an import, or the undoing of either. */
+  private isMany(record: ChangeRecord): boolean {
+    return record.kind === "profile" || record.kind === "import" || (record.kind === "revert" && !this.values.has(record.target));
   }
 
   private runOnChange(value: PanelValue<unknown>, candidate: unknown, previous: unknown, by: string): void {
@@ -1233,30 +1549,24 @@ export class AdminPanel implements ValueOwner {
     }
   }
 
-  /** Sends an operator's change to the other replicas. A failure is a notice: the change stands here. */
-  private publish(value: PanelValue<unknown>, candidate: unknown, record: ChangeRecord): void {
-    if (this.sync === undefined) return;
-    const outgoing: SyncMessage = { origin: this.origin, target: value.id, value: toJson(candidate), record: { ...record, origin: this.origin } };
-    this.sync.publish(outgoing).then(
-      () => this.noticeLog.delete("sync-publish"),
-      (error: unknown) => {
-        this.notice("warning", "sync-publish", `A change to ${value.label} could not be sent to the other replicas, so for now it applies to this one only: ${message(error)}`);
-        this.onError(error, "publishing a change");
-      },
-    );
+  /** A value's change made on another replica, applied here through the same checks, and shown with where it came from. */
+  private applyLayout(incoming: LayoutMessage): void {
+    this.sharedLayout = incoming.layout === null ? undefined : readLayout(incoming.layout);
+    this.log.remember({ ...incoming.record, origin: incoming.origin });
+    this.structureChanged();
+    this.version += 1;
   }
 
-  /** A change made on another replica, applied here through the same checks, and shown with where it came from. */
-  private receive(incoming: SyncMessage): void {
-    if (incoming.origin === this.origin) return;
+  private applyChange(incoming: ChangeMessage): void {
     const value = this.values.get(incoming.target);
     if (value === undefined || !value.editable) return;
     try {
-      this.schedule.cancelRevert(value.id);
+      // This replica's copy of a revert the change replaces goes quietly: the maker has announced it.
+      this.schedule.cancelRevert("value", value.id, true, false);
       value.write(incoming.value, incoming.record.by);
       this.log.remember({ ...incoming.record, origin: incoming.origin });
     } catch (error) {
-      this.notice("warning", `sync-refused-${value.id}`, `A change to ${value.label} from another replica was refused here, so the replicas now disagree: ${message(error)}`);
+      this.notice("warning", `sync-refused-${value.id}`, "noticeSyncRefused", { label: value.label, reason: message(error) });
     }
   }
 
@@ -1308,7 +1618,8 @@ export class AdminPanel implements ValueOwner {
         current = value.get();
       } catch (error) {
         this.getterFailed(value, error);
-        return this.decorate(value, { ...base, error: `reading ${value.label} failed: ${message(error)}` });
+        const why = { label: value.label, reason: message(error) };
+        return this.decorate(value, { ...base, error: format(ENGLISH.readFailed, why), errorKey: "readFailed", errorParams: why });
       }
       const encoded = encodeForWire(current);
       out = encoded.text === undefined ? { ...base, value: encoded.value } : { ...base, value: encoded.value, text: encoded.text };
@@ -1319,32 +1630,29 @@ export class AdminPanel implements ValueOwner {
     return this.decorate(value, out);
   }
 
-  /** What changes without the value changing: conditions, a pending revert, what is scheduled, recent changes. */
   private decorate(value: PanelValue<unknown>, out: WireValue): WireValue {
-    const condition = conditionOf(value.definition.visibleWhen, value.definition.disabledWhen);
-    if (condition.hidden === true) out.hidden = true;
-    if (condition.disabled !== undefined) out.disabled = condition.disabled;
-    const revert = this.schedule.revertFor(value.id);
-    if (revert !== undefined) {
-      out.revertAt = revert.at;
-      if (!value.definition.sensitive) out.revertTo = toJson(revert.to);
+    return decorateWire(value, out, { revert: this.schedule.revertFor("value", value.id), scheduled: this.schedule.scheduledFor("value", value.id), recent: this.timelines.get(value.id) });
+  }
+
+  private profileSchedulesFor(scope: PanelScope): { profileSchedules?: Record<string, ScheduledChange[]> } {
+    const out: Record<string, ScheduledChange[]> = {};
+    for (const profile of this.profiles.values()) {
+      if (!visible(scope, profile.group)) continue;
+      const entries = this.schedule.scheduledFor("profile", profile.id);
+      if (entries.length > 0) out[profile.id] = entries.map((entry) => scheduledShape(entry, true));
     }
-    const scheduled = this.schedule.scheduledFor(value.id);
-    if (scheduled.length > 0) out.scheduled = scheduled.map((entry) => (value.definition.sensitive ? { id: entry.id, at: entry.at, by: entry.by } : { id: entry.id, at: entry.at, by: entry.by, to: toJson(entry.to) }));
-    const recent = this.timelines.get(value.id);
-    if (recent !== undefined && recent.length > 0) out.recent = recent.slice();
-    return out;
+    return Object.keys(out).length === 0 ? {} : { profileSchedules: out };
   }
 
   private getterFailed(value: PanelValue<unknown>, error: unknown): void {
     if (this.failedGetters.has(value.id)) return;
     this.failedGetters.add(value.id);
-    this.notice("warning", `getter-${value.id}`, `Reading ${value.label} threw: ${message(error)}. The page shows the failure in its place; the rest of the panel is unaffected.`);
+    this.notice("warning", `getter-${value.id}`, "noticeGetterThrew", { label: value.label, reason: message(error) });
     this.onError(error, `reading "${value.id}"`);
   }
 
   private changeListenerFailed(value: PanelValue<unknown>, error: unknown): void {
-    this.notice("warning", `on-change-${value.id}`, `The change handler for ${value.label} failed: ${message(error)}. The new value was applied; whatever the handler was meant to do next may not have happened.`);
+    this.notice("warning", `on-change-${value.id}`, "noticeChangeHandler", { label: value.label, reason: message(error) });
     this.onError(error, `onChange of "${value.id}"`);
   }
 
@@ -1376,6 +1684,7 @@ export class AdminPanel implements ValueOwner {
       const schema: FeedSchema = { type: "feed", id: d.id, title: d.label, capacity: d.capacity, perSecond: d.perSecond };
       if (d.description !== undefined) schema.description = d.description;
       if (d.span !== undefined) schema.span = d.span;
+      if (d.size !== undefined) schema.size = d.size;
       entries.push({ order: d.order, rank: 1, sequence: d.sequence, items: [schema] });
     }
     for (const profile of this.profiles.values()) {
@@ -1415,8 +1724,19 @@ export class AdminPanel implements ValueOwner {
   }
 
   private revertible(record: ChangeRecord): boolean {
-    if (record.kind !== "edit" && record.kind !== "approval" && record.kind !== "revert" && record.kind !== "scheduled") return false;
     if (record.from === undefined || record.to === undefined) return false;
+    if (this.isMany(record)) {
+      const to = record.to as Record<string, JsonValue>;
+      const from = record.from as Record<string, JsonValue>;
+      if (to === null || typeof to !== "object" || Array.isArray(to) || Object.keys(to).length === 0) return false;
+      // A profile whose values include a sensitive one recorded only part of what it replaced.
+      if (record.kind === "profile" && (this.profiles.get(record.target)?.settings.some(([value]) => value.definition.sensitive) ?? true)) return false;
+      return Object.keys(to).every((id) => {
+        const value = this.values.get(id);
+        return value !== undefined && value.editable && Object.hasOwn(from, id) && sameJson(this.read(value), to[id]);
+      });
+    }
+    if (record.kind !== "edit" && record.kind !== "approval" && record.kind !== "revert" && record.kind !== "scheduled") return false;
     const value = this.values.get(record.target);
     if (value === undefined || !value.editable) return false;
     return sameJson(this.read(value), record.to);
@@ -1425,7 +1745,7 @@ export class AdminPanel implements ValueOwner {
   private persist(value: PanelValue<unknown>, candidate: unknown): void {
     if (!value.definition.persist || this.store === undefined) return;
     this.store.save(value.id, toJson(candidate)).catch((error: unknown) => {
-      this.notice("warning", `store-save-${value.id}`, `${value.label} was changed but could not be saved, so the change will not survive a restart: ${message(error)}`);
+      this.notice("warning", `store-save-${value.id}`, "noticeStoreSave", { label: value.label, reason: message(error) });
       this.onError(error, `saving "${value.id}"`);
     });
   }
@@ -1445,20 +1765,25 @@ export class AdminPanel implements ValueOwner {
       stored = await store.load();
     } catch (error) {
       this.stored = {};
-      this.notice("warning", "store-load", `Stored choices could not be loaded, so every persisted value starts at its declared default: ${message(error)}`);
+      this.notice("warning", "store-load", "noticeStoreLoad", { reason: message(error) });
       this.onError(error, "loading stored values");
       return;
     }
     this.stored = stored;
+    if (stored[LAYOUT_KEY] !== undefined && stored[LAYOUT_KEY] !== null) {
+      this.sharedLayout = readLayout(stored[LAYOUT_KEY]);
+      this.structureChanged();
+    }
     for (const value of this.values.values()) {
       if (value.definition.persist) this.restoreOne(value, stored);
-      this.schedule.restore(stored[SCHEDULE_KEY], value);
+      this.schedule.restore(stored[SCHEDULE_KEY], "value", value.id);
     }
+    for (const profile of this.profiles.keys()) this.schedule.restore(stored[SCHEDULE_KEY], "profile", profile);
     if (this.keepHistoryMs !== undefined && stored[HISTORY_KEY] !== undefined) {
       try {
         this.charts.restore(stored[HISTORY_KEY]);
       } catch (error) {
-        this.notice("warning", "history-restore", `Saved chart history could not be read, so charts start empty: ${message(error)}`);
+        this.notice("warning", "history-restore", "noticeHistoryRestore", { reason: message(error) });
       }
     }
   }
@@ -1470,113 +1795,23 @@ export class AdminPanel implements ValueOwner {
       value.check(candidate);
       value.write(candidate, "store");
     } catch (error) {
-      this.notice("warning", `store-refused-${value.id}`, `The stored value of ${value.label} was refused and the declared default kept: ${message(error)}`);
+      this.notice("warning", `store-refused-${value.id}`, "noticeStoreRefused", { label: value.label, reason: message(error) });
     }
   }
 }
 
-/** The handle `panel.group(name)` returns: the way to move things into a group after they were declared. */
-export class PanelGroup {
-  constructor(
-    private readonly panel: AdminPanel,
-    readonly name: string,
-  ) {}
-
-  /** Moves values and actions into this group. */
-  add(...items: Array<PanelValue<unknown> | PanelAction>): this {
-    for (const item of items) this.panel.move(item, this.name);
-    return this;
-  }
-
-  configure(options: GroupOptions): this {
-    this.panel.group(this.name, options);
-    return this;
-  }
-
-  /** Declares a value in this group. */
-  viewable<T>(initial: T | (() => T), options?: ViewableOptions | string): PanelValue<T> {
-    return this.panel.viewable(initial, { ...(typeof options === "string" ? { label: options } : options), group: this.name });
-  }
-
-  modifiable<T>(initial: T, options?: ModifiableOptions<T> | string): PanelValue<T> {
-    return this.panel.modifiable(initial, { ...(typeof options === "string" ? { label: options } : options), group: this.name } as ModifiableOptions<T>);
-  }
-
-  action(label: string, run: (context: ActionContext) => unknown, options: ActionOptions = {}): PanelAction {
-    return this.panel.action(label, run, { ...options, group: this.name });
-  }
-
-  table<Row = Record<string, unknown>>(label: string, options: TableOptions<Row>): PanelTable<Row> {
-    return this.panel.table(label, { ...options, group: this.name });
-  }
-
-  feed(label: string, options: FeedOptions = {}): PanelFeed {
-    return this.panel.feed(label, { ...options, group: this.name });
-  }
+/**
+ * The operator in an actor, without the route they came by: a delegate token records "ada via
+ * gateway", and that is still ada. What the two-person rule compares, so the same person cannot
+ * approve their own proposal by making one of the two through a gateway.
+ */
+function operatorOf(actor: string): string {
+  const via = actor.lastIndexOf(" via ");
+  return via === -1 ? actor : actor.slice(0, via);
 }
 
 export function createAdminPanel(options?: AdminPanelOptions): AdminPanel {
   return new AdminPanel(options);
 }
 
-function checkCondition(label: string, name: string, condition: unknown): void {
-  if (condition !== undefined && typeof condition !== "function") throw new AdminPanelConfigError(`"${label}" has a ${name} that is not a function`);
-}
 
-/** Evaluates a declaration's conditions. A condition that throws hides nothing and disables nothing: a bug must not lock an operator out. */
-function conditionOf(visibleWhen: (() => boolean) | undefined, disabledWhen: (() => string | false | undefined) | undefined): { hidden?: boolean; disabled?: string } {
-  const out: { hidden?: boolean; disabled?: string } = {};
-  if (visibleWhen !== undefined) {
-    try {
-      if (visibleWhen() === false) out.hidden = true;
-    } catch {
-      // Shown.
-    }
-  }
-  if (disabledWhen !== undefined) {
-    try {
-      const reason = disabledWhen();
-      if (typeof reason === "string" && reason !== "") out.disabled = reason;
-    } catch {
-      // Enabled.
-    }
-  }
-  return out;
-}
-
-function valueSchema(value: PanelValue<unknown>, writable: boolean): ValueSchema {
-  const d = value.definition;
-  const schema: ValueSchema = {
-    type: "value",
-    id: d.id,
-    label: d.label,
-    kind: d.kind,
-    editable: d.editable,
-    writable,
-    approval: d.approval,
-    timed: d.timed,
-    live: value.live,
-    sensitive: d.sensitive,
-    confirm: d.confirm,
-    constraints: d.constraints,
-  };
-  if (d.description !== undefined) schema.description = d.description;
-  if (d.unit !== undefined) schema.unit = d.unit;
-  if (d.format !== undefined) schema.format = d.format;
-  if (d.decimals !== undefined) schema.decimals = d.decimals;
-  if (value.chartId !== undefined) schema.chart = value.chartId;
-  if (d.span !== undefined) schema.span = d.span;
-  return schema;
-}
-
-function actionSchema(action: PanelAction, runnable: boolean, input: readonly ResolvedField[] | undefined): ActionSchema {
-  const d = action.definition;
-  const schema: ActionSchema = { type: "action", id: d.id, label: d.label, confirm: d.confirm, destructive: d.destructive, runnable };
-  if (d.description !== undefined) schema.description = d.description;
-  if (input !== undefined) schema.input = input.map((field) => field.schema);
-  if (d.span !== undefined) schema.span = d.span;
-  return schema;
-}
-
-// Kept so a future withTimeout user in this module does not re-import it; the async helpers are shared.
-void withTimeout;

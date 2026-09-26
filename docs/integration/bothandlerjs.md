@@ -6,7 +6,7 @@ What the bot handler decides, and the settings worth changing live.
 
 ---
 
-Runnable: [`examples/bothandlerjs.ts`](../../examples/bothandlerjs.ts).
+The preset is exercised by `tests/presets.test.ts`.
 
 ```ts
 import { BotHandler } from "@osqd/bothandlerjs";

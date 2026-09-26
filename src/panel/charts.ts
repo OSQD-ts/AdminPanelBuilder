@@ -14,11 +14,11 @@
 import { AdminPanelConfigError } from "../errors.js";
 import { slug } from "../internal/ids.js";
 import { rejectUnknown } from "../internal/options.js";
-import type { ChangeRecord, ChartKind, ChartOptions, ChartSchema, JsonValue, Sample, Span } from "../types.js";
+import type { CardSize, ChangeRecord, ChartKind, ChartOptions, ChartSchema, JsonValue, Sample, Span } from "../types.js";
 import type { PanelValue } from "../values/handle.js";
 import { History, MAX_HISTORY_POINTS, MIN_SAMPLE_INTERVAL_MS } from "../values/history.js";
 import { plottable } from "../values/kinds.js";
-import { checkSpan, checkTitle } from "./checks.js";
+import { checkCardSize, checkSpan, checkTitle } from "./checks.js";
 import { type PanelScope, visible } from "./scope.js";
 
 /** Series one chart may draw: one per chart colour slot. */
@@ -67,6 +67,7 @@ export interface ChartEntry {
   annotate: boolean;
   bins: number | undefined;
   span: Span | undefined;
+  size: CardSize | undefined;
 }
 
 export interface ChartHost {
@@ -116,7 +117,7 @@ export class ChartRegistry {
     value.chartId = chart.id;
   }
 
-  build(title: string, options: ChartOptions & { order?: number | undefined; span?: Span | undefined }, series: readonly PanelValue<unknown>[], placement: "alone" | "group", group: string | undefined, description: string | undefined): ChartEntry {
+  build(title: string, options: ChartOptions & { order?: number | undefined; span?: Span | undefined; size?: CardSize | undefined }, series: readonly PanelValue<unknown>[], placement: "alone" | "group", group: string | undefined, description: string | undefined): ChartEntry {
     const current = options.kind === "histogram" || options.kind === "heatmap";
     if (current && options.over !== undefined && options.over !== "keys") throw new AdminPanelConfigError(`chart "${title}" is a ${options.kind}, which draws the current value; it cannot be over ${options.over === "time" ? "time" : "another value"}`);
     const over = options.over ?? (current ? "keys" : "time");
@@ -173,6 +174,7 @@ export class ChartRegistry {
       annotate: options.annotate !== false,
       bins: options.bins,
       span: checkSpan(title, options.span),
+      size: checkCardSize(title, options.size),
     };
     for (const value of series) this.checkSeries(entry, value);
     this.charts.set(id, entry);
@@ -318,6 +320,7 @@ export class ChartRegistry {
     if (chart.stacked) schema.stacked = true;
     if (chart.bins !== undefined) schema.bins = chart.bins;
     if (chart.span !== undefined) schema.span = chart.span;
+    if (chart.size !== undefined) schema.size = chart.size;
     const lines = chart.lines
       .filter((line) => typeof line.value === "number" || visible(scope, line.value.group))
       .map((line) => (typeof line.value === "number" ? { label: line.label, value: line.value } : { label: line.label, from: line.value.id }));

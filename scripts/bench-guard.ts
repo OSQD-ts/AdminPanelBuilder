@@ -1,5 +1,5 @@
 /**
- * The performance ratchet for the write path.
+ * The performance ratchet for the write path and the read path.
  *
  * Budgets are ratios against a reference loop measured in the same process seconds earlier, never
  * absolute microseconds: a CI runner half as fast as a laptop runs both halves at half speed, so the
@@ -9,7 +9,7 @@
  *
  *   npm run bench:guard
  */
-import { cases, ITERATIONS, measure, reference } from "./bench-cases.js";
+import { cases, ITERATIONS, measure, readCases, reference } from "./bench-cases.js";
 
 /**
  * Measured over three runs on the machine this was written on (median of seven rounds each):
@@ -24,19 +24,29 @@ const BUDGETS: Record<string, number> = {
   "counter.inc()": 1.2,
   "record a percentile observation": 0.1,
   "push a feed entry": 3,
+  // Read path, per call: how many iterations of the reference loop one call costs. A read of a
+  // 1,000-value panel costs about what a thousand writes do, which is why pages poll and the
+  // application never waits on them. Measured when set: schema 1600–1760, state 1220–1260, a tick
+  // for 20 viewers 910–1000 — less than one state(), because the frame is computed once and shared.
+  // Unshared it would be twenty of them; the budget is what catches that coming back.
+  "schema() over 1,000 values": 3500,
+  "state() over 1,000 values": 2500,
+  "a stream tick for 20 viewers": 2000,
 };
 
 const yardstick = measure(reference, ITERATIONS);
 const failures: string[] = [];
-for (const benchCase of cases()) {
-  const ratio = measure(benchCase.run, ITERATIONS) / yardstick;
+for (const benchCase of [...cases(), ...readCases()]) {
+  const iterations = benchCase.iterations ?? ITERATIONS;
+  // A heavier case runs fewer iterations; per iteration against the reference's per iteration.
+  const ratio = measure(benchCase.run, iterations) / iterations / (yardstick / ITERATIONS);
   const budget = BUDGETS[benchCase.name];
   if (budget === undefined) {
     failures.push(`${benchCase.name} has no budget; add one at about twice the ratio it measures (${ratio.toFixed(3)})`);
     continue;
   }
   const verdict = ratio <= budget ? "ok  " : "SLOW";
-  console.error(`${verdict} ${benchCase.name.padEnd(36)} ${ratio.toFixed(3)} of the reference (budget ${budget})`);
+  console.error(`${verdict} ${benchCase.name.padEnd(36)} ${ratio < 10 ? ratio.toFixed(3) : ratio.toFixed(0)} of the reference (budget ${budget})`);
   if (ratio > budget) failures.push(`${benchCase.name}: ${ratio.toFixed(3)} > ${budget}`);
 }
 if (failures.length > 0) {

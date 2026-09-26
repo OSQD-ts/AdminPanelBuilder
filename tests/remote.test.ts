@@ -91,3 +91,31 @@ describe("a remote panel narrowed to some groups", () => {
     }
   });
 });
+
+describe("a narrowed remote panel's cost", () => {
+  it("answers a poll with one upstream request, and fetches the schema again when the structure changes", async () => {
+    const { panel, server } = await upstreamPanel();
+    const paths: string[] = [];
+    const counting = (async (url: string, init?: RequestInit) => {
+      paths.push(new URL(url).pathname);
+      return fetch(url, init);
+    }) as typeof fetch;
+    const remote = await gateway({ upstream: server.url, groups: ["Mail"], fetch: counting });
+    try {
+      await fetch(`${remote.url}/api/schema`);
+      paths.length = 0;
+      await fetch(`${remote.url}/api/state`);
+      await fetch(`${remote.url}/api/state`);
+      expect(paths).toEqual(["/api/state", "/api/state"]);
+      panel.modifiable(1, { label: "New", group: "Mail" });
+      paths.length = 0;
+      const state = await (await fetch(`${remote.url}/api/state`)).text();
+      expect(paths).toEqual(["/api/state", "/api/schema"]);
+      expect(state).toContain('"new"');
+    } finally {
+      await remote.close();
+      await server.close();
+      panel.close();
+    }
+  });
+});

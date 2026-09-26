@@ -1,5 +1,7 @@
 node_modules/
 dist/
 coverage/
+.claude/
 *.tgz
 data/
+tests/browser/screenshots/*.actual.jpg

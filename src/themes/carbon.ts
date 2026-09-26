@@ -30,6 +30,7 @@ export const carbonTheme: Theme = {
     headerInk: "#f4f4f4",
     grid: "#e0e0e0",
     shadow: "none",
+    shadowRaised: "0 2px 6px rgba(0,0,0,.3)",
     chart: ["#6929c4", "#1192e8", "#005d5d", "#9f1853", "#fa4d56", "#570408", "#198038", "#002d9c"],
   },
   dark: {
@@ -53,6 +54,7 @@ export const carbonTheme: Theme = {
     headerInk: "#f4f4f4",
     grid: "#393939",
     shadow: "none",
+    shadowRaised: "0 2px 6px rgba(0,0,0,.5)",
     chart: ["#8a3ffc", "#33b1ff", "#007d79", "#ff7eb6", "#fa4d56", "#fff1f1", "#6fdc8c", "#4589ff"],
   },
   shape: {

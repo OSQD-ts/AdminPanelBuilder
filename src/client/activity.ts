@@ -12,9 +12,11 @@ import { confirmingButton } from "./blocks.js";
 import type { CardHost } from "./cards.js";
 import { pendingRow } from "./cards.js";
 import { clear, el } from "./dom.js";
-import { formatAgo, formatValue } from "./format.js";
-import { explain } from "./explain.js";
+import { formatAgo, formatValue, initialsOf, slotOf } from "./format.js";
+import { explain, said } from "./explain.js";
+import { localeSpec } from "./i18n.js";
 import { serverTime } from "./store.js";
+import { reasonField } from "./when.js";
 
 export interface ActivityView {
   readonly element: HTMLElement;
@@ -24,16 +26,24 @@ export interface ActivityView {
 export function buildActivity(host: CardHost): ActivityView {
   const { t } = host;
   const section = el("div", "apb-activity");
-  const pending = el("section");
+  // Across the page: a change waiting for a second operator is the first thing to answer.
+  const pending = el("section", "apb-approvals");
   pending.append(el("h2", null, t("pendingTitle")));
   const pendingList = el("div");
   pending.append(pendingList);
   const changes = el("section");
-  changes.append(el("h2", null, t("recentChanges")));
+  // How many there are, beside the heading: the same badge the tabs carry.
+  const changeCount = el("span", "apb-count");
+  const changeHeading = el("h2", null, t("recentChanges"));
+  changeHeading.append(changeCount);
+  changes.append(changeHeading);
   const changeList = el("div");
   changes.append(changeList);
   const notices = el("section");
-  notices.append(el("h2", null, t("notices")));
+  const noticeCount = el("span", "apb-count");
+  const noticeHeading = el("h2", null, t("notices"));
+  noticeHeading.append(noticeCount);
+  notices.append(noticeHeading);
   const noticeList = el("div");
   notices.append(noticeList);
   section.append(pending, changes, notices);
@@ -46,14 +56,16 @@ export function buildActivity(host: CardHost): ActivityView {
     pending.hidden = store.pending.length === 0;
     for (const change of store.pending) pendingList.append(pendingRow(host, change, host.values.get(change.target)));
     clear(changeList);
+    changeCount.textContent = store.changes.length === 0 ? "" : String(store.changes.length);
     if (store.changes.length === 0) changeList.append(el("p", "apb-empty", t("noChanges")));
     else changeList.append(changeTable(host, show));
     clear(noticeList);
+    noticeCount.textContent = store.notices.length === 0 ? "" : String(store.notices.length);
     if (store.notices.length === 0) noticeList.append(el("p", "apb-empty", t("noNotices")));
     for (const notice of [...store.notices].reverse()) {
       const item = el("div", "apb-notice");
       item.dataset.level = notice.level;
-      item.append(el("span", "apb-notice-level", notice.level === "warning" ? "Warning:" : "Note:"), document.createTextNode(notice.message));
+      item.append(el("span", "apb-notice-level", t(notice.level === "warning" ? "noticeWarning" : "noticeNote")), document.createTextNode(` ${said(t, notice.key, notice.params, notice.message)}`));
       noticeList.append(item);
     }
   };
@@ -64,7 +76,8 @@ function changeTable(host: CardHost, refreshed: () => void): HTMLElement {
   const { t, deps } = host;
   const store = host.store();
   const table = el("table", "apb-table apb-table-stacking");
-  const headings = ["When", "Who", "What", "Result"];
+  const headings = [t("headWhen"), t("headWho"), t("headWhat"), t("headResult")];
+  const local = localeSpec(t);
   const head = el("tr");
   for (const text of [...headings, ""]) {
     const th = el("th", text === "" ? "apb-sr" : null, text === "" ? t("undo") : text);
@@ -79,15 +92,22 @@ function changeTable(host: CardHost, refreshed: () => void): HTMLElement {
   for (const change of [...store.changes].reverse()) {
     const row = el("tr");
     const schema = host.values.get(change.target);
-    const shownValue = (value: JsonValue | undefined): string => (value === undefined ? "hidden" : formatValue(value, schema));
-    const what =
-      change.kind === "edit" || change.kind === "revert" || change.kind === "scheduled" || (change.kind === "approval" && change.from !== undefined)
-        ? change.from === undefined && change.to !== undefined
-          ? `${change.label}: → ${shownValue(change.to)}`
-          : `${change.label}: ${shownValue(change.from)} → ${shownValue(change.to)}`
-        : change.kind === "action"
-          ? `Ran ${change.label}`
-          : change.label;
+    const shownValue = (value: JsonValue | undefined): string => (value === undefined ? t("hidden") : formatValue(value, { ...schema, ...local }));
+    const valueChange = change.kind === "edit" || change.kind === "revert" || change.kind === "scheduled" || (change.kind === "approval" && change.from !== undefined);
+    // Before and after as their own pieces, so the eye finds the new value; the arrow is still
+    // there for anyone copying the row, and for a screen reader.
+    const what = el("span", "apb-change");
+    if (valueChange) {
+      what.append(el("span", "apb-change-label", `${change.label}:`), document.createTextNode(" "));
+      if (!(change.from === undefined && change.to !== undefined)) what.append(el("del", "apb-change-from", shownValue(change.from)), document.createTextNode(" "));
+      what.append(el("span", "apb-change-arrow", "→"), document.createTextNode(" "), el("ins", "apb-change-to", shownValue(change.to)));
+    } else what.textContent = change.kind === "action" ? t("ranAction", { label: change.label }) : change.label;
+    if (change.reason !== undefined) what.append(document.createTextNode(` — ${t("reasonShown", { reason: change.reason })}`));
+    // Who, with initials in a badge coloured by name: the same person reads as the same colour down the list.
+    const who = el("span", "apb-who");
+    const initials = el("span", `apb-initials apb-slot-${slotOf(change.by)}`, initialsOf(change.by));
+    initials.setAttribute("aria-hidden", "true");
+    who.append(initials, document.createTextNode(change.origin === undefined ? change.by : `${change.by} (${change.origin})`));
     const undo = el("td");
     undo.dataset.label = "";
     if (change.revertible === true && api !== undefined && schema?.writable === true) {
@@ -107,9 +127,10 @@ function changeTable(host: CardHost, refreshed: () => void): HTMLElement {
         result,
       );
     }
-    const cells = [formatAgo(change.at, now), change.origin === undefined ? change.by : `${change.by} (${change.origin})`, what, change.outcome ?? (change.ok ? "Applied" : "Failed")];
-    cells.forEach((text, index) => {
-      const td = el("td", null, text);
+    const cells: Array<string | HTMLElement> = [formatAgo(change.at, now, t.locale), who, what, change.outcome ?? t(change.ok ? "resultApplied" : "resultFailed")];
+    cells.forEach((content, index) => {
+      const td = el("td");
+      td.append(content);
       td.dataset.label = headings[index] ?? "";
       row.append(td);
     });
@@ -202,18 +223,20 @@ function showDiff(host: CardHost, preview: HTMLElement, result: HTMLElement, set
   const list = el("ul", "apb-import-diff");
   for (const line of diff) {
     const schema = host.values.get(line.id);
-    const item = el("li", null, `${line.label}: ${formatValue(line.from, schema)} → ${formatValue(line.to, schema)}`);
+    const spec = { ...schema, ...localeSpec(t) };
+    const item = el("li", null, `${line.label}: ${formatValue(line.from, spec)} → ${formatValue(line.to, spec)}`);
     if (line.error !== undefined) {
       item.dataset.status = "bad";
-      item.append(el("span", "apb-status-word", ` ${line.error}`));
+      item.append(el("span", "apb-status-word", ` ${said(t, line.errorKey, line.errorParams, line.error)}`));
     }
     list.append(item);
   }
   preview.append(list);
   const refused = unknown.length > 0 || diff.some((line) => line.error !== undefined);
+  const why = reasonField(t("importSettings"), false, t);
   const apply = confirmingButton(t("importApply", { count: diff.length }), true, "apb-button", t, async () => {
     try {
-      const changed = await api.importSettings(settings);
+      const changed = await api.importSettings(settings, why.read());
       clear(preview);
       result.dataset.ok = "true";
       result.textContent = t("importApplied", { count: changed });
@@ -225,5 +248,5 @@ function showDiff(host: CardHost, preview: HTMLElement, result: HTMLElement, set
   });
   // Shown but disabled: the list above says why, and a button that would be refused anyway invites the click.
   apply.disabled = refused;
-  preview.append(apply);
+  preview.append(why.element, apply);
 }

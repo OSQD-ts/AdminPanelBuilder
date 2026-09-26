@@ -77,7 +77,8 @@ export function installShortcuts(options: {
   };
 }
 
-function dialog(title: string, t: Translate): { element: HTMLDialogElement; body: HTMLElement; open(): void } {
+/** A modal dialog themed with the panel: a heading, a close button, a body; focus goes back where it came from on close. */
+export function dialog(title: string, t: Translate): { element: HTMLDialogElement; body: HTMLElement; open(): void; leave(): void } {
   const element = el("dialog", "apb-dialog");
   const titleId = uid("dialog-title");
   element.setAttribute("aria-labelledby", titleId);
@@ -95,7 +96,13 @@ function dialog(title: string, t: Translate): { element: HTMLDialogElement; body
   element.addEventListener("close", () => {
     if (returnTo instanceof HTMLElement && returnTo.isConnected) returnTo.focus();
   });
+  /** Closes without taking focus back: for a button in the dialog that sends the viewer somewhere else on the page. */
+  const leave = (): void => {
+    returnTo = null;
+    element.close();
+  };
   return {
+    leave,
     element,
     body,
     open() {

@@ -10,6 +10,7 @@ import type { Api } from "./api.js";
 import { confirmingButton } from "./blocks.js";
 import { clear, el } from "./dom.js";
 import { formatValue } from "./format.js";
+import { localeSpec } from "./i18n.js";
 import { explain } from "./explain.js";
 import type { Translate } from "./i18n.js";
 
@@ -51,8 +52,15 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight = false;
 
+  /** A request asked for while another was out: it runs when that one returns, with the latest query. */
+  let again = false;
   const load = (): void => {
-    if (api === undefined || inFlight) return;
+    if (api === undefined) return;
+    if (inFlight) {
+      // Dropping it would show the page for the query before the one the operator just asked for.
+      again = true;
+      return;
+    }
     inFlight = true;
     api
       .table(schema.id, { offset, limit: schema.pageSize, sort, dir, q: query })
@@ -65,17 +73,28 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
       })
       .finally(() => {
         inFlight = false;
+        if (again) {
+          again = false;
+          load();
+        }
       });
   };
 
+  /** What is drawn now, so an answer that changes nothing leaves the rows, and any selection in them, alone. */
+  let shown = "";
   const show = (answer: TableRowsAnswer): void => {
+    const key = `${offset}|${sort ?? ""}|${dir}|${JSON.stringify(answer)}`;
+    if (key === shown) return;
+    shown = key;
     total = answer.total;
     clear(scroller);
     const table = el("table", "apb-table apb-table-stacking");
     const caption = el("caption", "apb-sr", schema.title);
     const head = el("tr");
+    // A column of numbers is right-aligned, heading included, so the digits line up by place.
+    const numeric = new Set(schema.columns.filter((column) => (column.format !== undefined && column.format !== "plain" && column.format !== "timestamp") || (answer.rows.length > 0 && answer.rows.every((row) => { const cell = row.cells[column.key]; return cell === null || cell === undefined || typeof cell === "number"; }))).map((column) => column.key));
     for (const column of schema.columns) {
-      const th = el("th");
+      const th = el("th", numeric.has(column.key) ? "apb-num" : null);
       th.setAttribute("scope", "col");
       if (column.sortable && api !== undefined) {
         const button = el("button", "apb-sort", column.label);
@@ -95,7 +114,7 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
       head.append(th);
     }
     if (schema.actions.length > 0) {
-      const th = el("th", "apb-sr", "Actions");
+      const th = el("th", "apb-sr", t("tableActions"));
       th.setAttribute("scope", "col");
       head.append(th);
     }
@@ -106,7 +125,7 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
       const tr = el("tr");
       for (const column of schema.columns) {
         const value = row.cells[column.key] ?? null;
-        const td = el("td", null, formatValue(value, { format: column.format, unit: column.unit, decimals: column.decimals }));
+        const td = el("td", numeric.has(column.key) ? "apb-num" : null, formatValue(value, { format: column.format, unit: column.unit, decimals: column.decimals, ...localeSpec(t) }));
         // Read by the stylesheet on narrow screens, where each row becomes a card of labelled lines.
         td.dataset.label = column.label;
         const flagged = row.status?.[column.key];
@@ -124,8 +143,9 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
           const button = confirmingButton(action.label, action.confirm, action.destructive ? "apb-tool apb-tool-destructive" : "apb-tool", t, async () => {
             if (api === undefined) return;
             try {
+              const said = await api.runRow(schema.id, action.id, row.id);
               message.dataset.ok = "true";
-              message.textContent = await api.runRow(schema.id, action.id, row.id);
+              message.textContent = said;
               load();
             } catch (problem) {
               message.dataset.ok = "false";
@@ -142,7 +162,8 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
     }
     table.append(caption, thead, tbody);
     scroller.append(table);
-    if (answer.rows.length === 0) scroller.append(el("p", "apb-empty", t("tableEmpty")));
+    // Nothing to show and nothing asked for is not the same as nothing matching what was asked.
+    if (answer.rows.length === 0) scroller.append(el("p", "apb-empty", t(query === "" ? "tableNothing" : "tableEmpty")));
     range.textContent = total === 0 ? "" : t("tableRange", { from: offset + 1, to: offset + answer.rows.length, total });
     previous.disabled = offset === 0;
     next.disabled = offset + answer.rows.length >= total;
@@ -164,7 +185,7 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
       load();
     }, 250);
   });
-  if (api === undefined) status.textContent = "A snapshot does not include table rows.";
+  if (api === undefined) status.textContent = t("snapshotNoRows");
   return { element: wrap, refresh: load };
 }
 

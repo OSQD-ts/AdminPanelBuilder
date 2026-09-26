@@ -31,6 +31,7 @@ export function createFetchHandler(panel: AdminPanel, options: FetchServeOptions
       url: `${url.pathname}${url.search}`,
       headers,
       address: address?.(request) ?? "",
+      secure: url.protocol === "https:",
       body: async (limit) => {
         const declared = Number(request.headers.get("content-length") ?? "0");
         if (declared > limit) throw new BodyTooLargeError(limit);

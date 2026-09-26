@@ -20,7 +20,9 @@ apb watch http://127.0.0.1:9780 queue-length --interval 5s   # a line whenever i
 apb export http://127.0.0.1:9780 > settings.json
 apb import http://staging:9780 settings.json --dry-run      # what would change; exit 1 if any would be refused
 apb import http://staging:9780 settings.json
-apb verify-log data/panel-changes.jsonl                      # the change log's hash chain
+apb verify-log data/panel-changes.jsonl                      # the change log's hash chain, rotated files too
+apb set http://127.0.0.1:9780 maintenance-mode true --repeat "daily 02:00" --tz Europe/Warsaw --for 1h --reason "backup window"
+apb apply http://127.0.0.1:9780 tournament-mode --at 2026-10-03T18:00:00Z --reason "Saturday tournament"
 apb config admin-panel.toml                                  # the listener config as it resolves, token redacted
 source <(apb completion bash)
 ```

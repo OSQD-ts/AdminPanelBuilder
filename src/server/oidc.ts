@@ -16,7 +16,7 @@ import { AdminPanelConfigError } from "../errors.js";
 import { withDeadline } from "../internal/async.js";
 import { type Grants, unionGrants } from "../panel/scope.js";
 import type { PanelResponse } from "./types.js";
-import { base64url, checkGrants, checkSecret, fromBase64url, RevocationList, SESSION_COOKIE, type SessionInfo, seal, sessionCookie, sessionInfo, unseal } from "./session.js";
+import { base64url, checkGrants, checkSecret, fromBase64url, overTls, RevocationList, SESSION_COOKIE, type SessionInfo, seal, sessionCookie, sessionInfo, unseal } from "./session.js";
 
 export interface OidcOptions {
   /** The provider's issuer URL, as it appears in its tokens: `https://accounts.google.com`. */
@@ -43,6 +43,8 @@ export interface OidcOptions {
   groups?: { claim?: string | undefined; grants: Readonly<Record<string, Grants>> } | undefined;
   /** Whether a revoked session id is refused; asked on every request. */
   revoked?: ((id: string) => boolean | Promise<boolean>) | undefined;
+  /** Sign-outs every replica honours: `redisRevocations(redis)`. */
+  revocations?: import("./session.js").RevocationStore | undefined;
   /** How long a session lasts. Default 8 hours. */
   sessionTtlMs?: number | undefined;
   fetch?: typeof fetch | undefined;
@@ -72,11 +74,13 @@ export interface AuthContext {
   query: URLSearchParams;
   headers: Readonly<Record<string, string | undefined>>;
   basePath: string;
+  /** Whether the browser reached the panel over TLS: the cookies set here carry `Secure` when it did. */
+  secure?: boolean | undefined;
 }
 
 export function createOidc(options: OidcOptions, where: string) {
   for (const key of Object.keys(options)) {
-    if (!["issuer", "clientId", "clientSecret", "baseUrl", "secret", "scopes", "allow", "groups", "revoked", "sessionTtlMs", "fetch", "now"].includes(key)) throw new AdminPanelConfigError(`${where}: auth.oidc has an option "${key}" that nothing reads`);
+    if (!["issuer", "clientId", "clientSecret", "baseUrl", "secret", "scopes", "allow", "groups", "revoked", "revocations", "sessionTtlMs", "fetch", "now"].includes(key)) throw new AdminPanelConfigError(`${where}: auth.oidc has an option "${key}" that nothing reads`);
   }
   if (typeof options.issuer !== "string" || !/^https?:\/\//.test(options.issuer)) throw new AdminPanelConfigError(`${where}: auth.oidc.issuer must be the provider's URL`);
   if (typeof options.clientId !== "string" || options.clientId === "") throw new AdminPanelConfigError(`${where}: auth.oidc.clientId is empty`);
@@ -123,11 +127,13 @@ export function createOidc(options: OidcOptions, where: string) {
       if (info === undefined || signedOut.has(info.id, now())) return undefined;
       const revoked = options.revoked;
       if (revoked !== undefined && (await Promise.resolve().then(() => revoked(info.id)).catch(() => true))) return undefined;
+      if (options.revocations !== undefined && (await options.revocations.has(info.id).catch(() => true))) return undefined;
       return info;
     },
 
     async handle(context: AuthContext): Promise<PanelResponse | undefined> {
       const cookiePath = context.basePath || "/";
+      const secure = overTls(context);
       if (context.path === "/auth/login" && context.method === "GET") {
         const doc = await discover();
         const state = random();
@@ -146,12 +152,15 @@ export function createOidc(options: OidcOptions, where: string) {
           code_challenge: challenge,
           code_challenge_method: "S256",
         }).toString();
-        return redirect(url.toString(), sessionCookie(FLOW_COOKIE, flow, cookiePath, FLOW_TTL_MS / 1000));
+        return redirect(url.toString(), sessionCookie(FLOW_COOKIE, flow, cookiePath, FLOW_TTL_MS / 1000, secure));
       }
       if (context.path === "/auth/logout" && context.method === "GET") {
         const info = await sessionInfo(secret, readCookie(context.headers.cookie, SESSION_COOKIE), now());
-        if (info !== undefined) signedOut.add(info.id, info.expires);
-        const cleared = sessionCookie(SESSION_COOKIE, "", cookiePath, 0);
+        if (info !== undefined) {
+          signedOut.add(info.id, info.expires);
+          await options.revocations?.add(info.id, info.expires).catch(() => undefined);
+        }
+        const cleared = sessionCookie(SESSION_COOKIE, "", cookiePath, 0, secure);
         // Signing out of the panel alone would leave the provider's session, and the next visit would
         // sign straight back in. Where the provider offers logout, it is asked too.
         let doc: Discovery | undefined;
@@ -204,7 +213,7 @@ export function createOidc(options: OidcOptions, where: string) {
       const payload: { n: string; e: number; j: string; g?: Grants } = { n: allowed, e: now() + ttl, j: random() };
       if (grants !== undefined) payload.g = grants;
       const session = await seal(signing, payload);
-      return { status: 303, headers: { location: `${context.basePath}/`, "set-cookie": sessionCookie(SESSION_COOKIE, session, cookiePath, ttl / 1000), "cache-control": "no-store" }, body: "" };
+      return { status: 303, headers: { location: `${context.basePath}/`, "set-cookie": sessionCookie(SESSION_COOKIE, session, cookiePath, ttl / 1000, secure), "cache-control": "no-store" }, body: "" };
     },
   };
 }

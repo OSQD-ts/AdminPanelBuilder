@@ -14,62 +14,31 @@
  * - The page checks what it can before sending, and the server checks everything again. A
  *   refusal is shown in place with the server's own sentence.
  */
-import type { JsonValue, ValueSchema, WireValue } from "../types.js";
-import { el, uid } from "./dom.js";
-import { formatValue } from "./format.js";
+import type { JsonValue, RepeatRuleShape, ValueSchema, WireValue } from "../types.js";
+import { busy, el, uid } from "./dom.js";
+import { formatDuration, formatValue } from "./format.js";
 import { explain } from "./explain.js";
-import type { Translate } from "./i18n.js";
+import { localeSpec, type Translate } from "./i18n.js";
+import { reasonField, whenField } from "./when.js";
 
 export interface EditorContext {
-  /**
-   * Applies the value: for a while when `revertAfterMs` is given, at a later time when `at` is.
-   * Resolves to a note to show, if any.
-   */
-  submit(value: unknown, revertAfterMs?: number, at?: number): Promise<string | undefined>;
+  /** Applies the value, now or as `change` says. Resolves to a note to show, if any. */
+  submit(value: unknown, change: ChangeRequest): Promise<string | undefined>;
   t: Translate;
-  /** Offers a time to apply the change at. Off for snapshots and read-only views. */
+  /** Offers a time and a repeat. Off for snapshots and read-only views. */
   schedulable?: boolean | undefined;
 }
 
-/**
- * A folded "Later" with a local date and time. Folded because most changes are for now, and a
- * second always-visible input on every card would say otherwise.
- */
-function scheduleField(schema: ValueSchema, t: Translate): { element: HTMLElement; read(): number | undefined; clear(): void } {
-  const details = el("details", "apb-when");
-  details.append(el("summary", null, t("schedule")));
-  const id = uid("at");
-  const label = el("label", "apb-input-label", t("scheduleAt"));
-  label.htmlFor = id;
-  const input = el("input", "apb-input apb-at");
-  input.type = "datetime-local";
-  input.id = id;
-  input.setAttribute("aria-label", `${schema.label}: ${t("scheduleAt")}`);
-  const hint = el("p", "apb-hint", t("scheduleHint"));
-  details.append(label, input, hint);
-  return {
-    element: details,
-    read: () => {
-      if (input.value === "") return undefined;
-      const at = new Date(input.value).getTime();
-      if (!Number.isFinite(at)) throw new Error("Enter a date and time.");
-      return at;
-    },
-    clear: () => {
-      input.value = "";
-      details.open = false;
-    },
-  };
+/** What the page sends with a change: for a while, at a time, by a rule, and why. */
+export interface ChangeRequest {
+  revertAfterMs?: number | undefined;
+  at?: number | undefined;
+  repeat?: RepeatRuleShape | undefined;
+  reason?: string | undefined;
 }
 
 /** How long a timed change may last, as offered on the page. */
-const DURATIONS: Array<[string, number]> = [
-  ["5 min", 300_000],
-  ["15 min", 900_000],
-  ["1 h", 3_600_000],
-  ["4 h", 14_400_000],
-  ["1 day", 86_400_000],
-];
+const DURATIONS = [300_000, 900_000, 3_600_000, 14_400_000, 86_400_000];
 
 /** A select of how long a change should last; absent when the value does not take timed changes. */
 function durationSelect(schema: ValueSchema, t: Translate): HTMLSelectElement | undefined {
@@ -79,8 +48,8 @@ function durationSelect(schema: ValueSchema, t: Translate): HTMLSelectElement | 
   const forever = el("option", null, t("forever"));
   forever.value = "";
   select.append(forever);
-  for (const [label, ms] of DURATIONS) {
-    const option = el("option", null, `${t("forAWhile")} ${label}`);
+  for (const ms of DURATIONS) {
+    const option = el("option", null, `${t("forAWhile")} ${formatDuration(ms, t.locale)}`);
     option.value = String(ms);
     select.append(option);
   }
@@ -110,20 +79,57 @@ export function buildEditor(schema: ValueSchema, labelId: string, context: Edito
   const note = el("p", "apb-hint");
   note.setAttribute("aria-live", "polite");
   const duration = durationSelect(schema, t);
-  const later = context.schedulable === true ? scheduleField(schema, t) : undefined;
-  const why = el("p", "apb-hint apb-disabled-reason");
-  why.hidden = true;
+  const later = context.schedulable === true ? whenField(schema.label, t) : undefined;
+  const why = reasonField(schema.label, schema.reasonRequired === true, t);
+  const blocked = el("p", "apb-hint apb-disabled-reason");
+  blocked.hidden = true;
   let dirty = false;
   let current: JsonValue = null;
   let armedUntil = 0;
 
-  const field = buildField(schema, labelId, () => {
+  const field = buildField(schema, labelId, t, () => {
     dirty = true;
     disarm();
+    markDirty();
   });
   field.control.setAttribute("aria-describedby", error.id);
-  form.append(...field.nodes, ...(duration === undefined ? [] : [duration]), button, ...(later === undefined ? [] : [later.element]), why, error, note);
-  if (schema.sensitive) form.append(el("p", "apb-hint", "This value is never shown. Entering a new one replaces it."));
+  // A reason that must be given is part of the change, so it comes before the button, not after it;
+  // an optional one is a fold under it. What the panel answers — a refusal, or why the button cannot
+  // be pressed — reads directly under the button it belongs to.
+  const asked = schema.reasonRequired === true ? [why.element] : [];
+  const folded = schema.reasonRequired === true ? [] : [why.element];
+  form.append(...field.nodes, ...asked, ...(duration === undefined ? [] : [duration]), button, blocked, error, ...folded, ...(later === undefined ? [] : [later.element]), note);
+  if (schema.sensitive) form.append(el("p", "apb-hint", t("neverShown")));
+
+  /** Marks the form while it holds something other than the panel's value, so an edit not yet applied shows. */
+  function markDirty(): void {
+    let differs = true;
+    if (schema.sensitive) differs = (field.control as HTMLInputElement).value !== "";
+    else {
+      try {
+        differs = JSON.stringify(field.read()) !== JSON.stringify(current);
+      } catch {
+        // Not a value yet (half a number, invalid JSON): certainly not the panel's.
+      }
+    }
+    form.toggleAttribute("data-dirty", differs);
+  }
+
+  /** Puts the panel's value back into the field, dropping what was typed. */
+  function abandon(): void {
+    dirty = false;
+    field.write(schema.sensitive ? null : current);
+    form.removeAttribute("data-dirty");
+    error.textContent = "";
+    disarm();
+  }
+
+  form.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !form.hasAttribute("data-dirty") || !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    abandon();
+  });
 
   function disarm(): void {
     armedUntil = 0;
@@ -134,10 +140,12 @@ export function buildEditor(schema: ValueSchema, labelId: string, context: Edito
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     let candidate: unknown;
-    let at: number | undefined;
+    let when: { at?: number | undefined; repeat?: RepeatRuleShape | undefined } = {};
+    const reason = why.read();
     try {
       candidate = field.read();
-      at = later?.read();
+      when = later?.read() ?? {};
+      if (schema.reasonRequired === true && reason === undefined) throw new Error(t("refuseReasonRequired", { label: schema.label }));
     } catch (problem) {
       error.textContent = problem instanceof Error ? problem.message : String(problem);
       return;
@@ -145,7 +153,7 @@ export function buildEditor(schema: ValueSchema, labelId: string, context: Edito
     if (schema.confirm && Date.now() > armedUntil) {
       armedUntil = Date.now() + ARM_MS;
       button.dataset.armed = "true";
-      button.textContent = schema.sensitive ? t("replaceConfirm") : t("applyConfirm", { value: short(formatValue(candidate as JsonValue, schema)) });
+      button.textContent = schema.sensitive ? t("replaceConfirm") : t("applyConfirm", { value: short(formatValue(candidate as JsonValue, { ...schema, ...localeSpec(t) })) });
       setTimeout(() => {
         if (Date.now() >= armedUntil) disarm();
       }, ARM_MS + 50);
@@ -156,13 +164,14 @@ export function buildEditor(schema: ValueSchema, labelId: string, context: Edito
     button.disabled = true;
     note.textContent = "";
     const revert = duration === undefined || duration.value === "" ? undefined : Number(duration.value);
-    context
-      .submit(candidate, revert, at)
+    busy(button, context.submit(candidate, { revertAfterMs: revert, at: when.at, repeat: when.repeat, reason }))
       .then((message) => {
         dirty = false;
+        form.removeAttribute("data-dirty");
         if (message !== undefined) note.textContent = message;
         if (schema.sensitive) field.write(null);
         later?.clear();
+        why.clear();
       })
       .catch((problem: unknown) => {
         error.textContent = explain(problem, t);
@@ -179,11 +188,12 @@ export function buildEditor(schema: ValueSchema, labelId: string, context: Edito
       current = wire.value;
       if (dirty || form.contains(form.ownerDocument.activeElement) || isFocusedInShadow(form)) return;
       field.write(current);
+      form.removeAttribute("data-dirty");
     },
     disable(reason) {
       disableAll(form, reason !== undefined);
-      why.hidden = reason === undefined;
-      why.textContent = reason === undefined ? "" : t("disabledBecause", { reason });
+      blocked.hidden = reason === undefined;
+      blocked.textContent = reason === undefined ? "" : t("disabledBecause", { reason });
     },
   };
 }
@@ -205,13 +215,13 @@ interface Field {
   write(value: JsonValue): void;
 }
 
-function buildField(schema: ValueSchema, labelId: string, onInput: () => void): Field {
+function buildField(schema: ValueSchema, labelId: string, t: Translate, onInput: () => void): Field {
   const c = schema.constraints;
   if (schema.kind === "enum") {
     const select = el("select", "apb-select");
     select.setAttribute("aria-labelledby", labelId);
     (c.options ?? []).forEach((option, index) => {
-      const node = el("option", null, formatValue(option, schema));
+      const node = el("option", null, formatValue(option, { ...schema, ...localeSpec(t) }));
       node.value = String(index);
       select.append(node);
     });
@@ -251,7 +261,11 @@ function buildField(schema: ValueSchema, labelId: string, onInput: () => void): 
       input.addEventListener("input", () => {
         if (range !== undefined) range.value = input.value;
       });
-      nodes.push(range);
+      // The ends of the slider, for the eye; the slider itself tells assistive technology.
+      const scale = el("div", "apb-range-scale");
+      scale.setAttribute("aria-hidden", "true");
+      scale.append(el("span", null, formatValue(c.min, { ...schema, ...localeSpec(t) })), el("span", null, formatValue(c.max, { ...schema, ...localeSpec(t) })));
+      nodes.push(range, scale);
     }
     return {
       nodes,
@@ -259,10 +273,10 @@ function buildField(schema: ValueSchema, labelId: string, onInput: () => void): 
       read: () => {
         const text = input.value.trim();
         const number = Number(text);
-        if (text === "" || !Number.isFinite(number)) throw new Error("Enter a number.");
-        if (c.min !== undefined && number < c.min) throw new Error(`The smallest accepted value is ${c.min}.`);
-        if (c.max !== undefined && number > c.max) throw new Error(`The largest accepted value is ${c.max}.`);
-        if (c.integer === true && !Number.isInteger(number)) throw new Error("Enter a whole number.");
+        if (text === "" || !Number.isFinite(number)) throw new Error(t("enterNumber"));
+        if (c.min !== undefined && number < c.min) throw new Error(t("smallestAccepted", { min: c.min }));
+        if (c.max !== undefined && number > c.max) throw new Error(t("largestAccepted", { max: c.max }));
+        if (c.integer === true && !Number.isInteger(number)) throw new Error(t("enterWhole"));
         return number;
       },
       write: (value) => {
@@ -281,11 +295,11 @@ function buildField(schema: ValueSchema, labelId: string, onInput: () => void): 
       nodes: [area],
       control: area,
       read: () => {
-        if (schema.kind === "string") return checkText(area.value, schema);
+        if (schema.kind === "string") return checkText(area.value, schema, t);
         try {
           return JSON.parse(area.value) as unknown;
         } catch {
-          throw new Error("That is not valid JSON.");
+          throw new Error(t("invalidJson"));
         }
       },
       write: (value) => {
@@ -297,7 +311,7 @@ function buildField(schema: ValueSchema, labelId: string, onInput: () => void): 
   input.type = schema.sensitive ? "password" : "text";
   if (schema.sensitive) {
     input.autocomplete = "new-password";
-    input.placeholder = "Enter a new value";
+    input.placeholder = t("enterNewValue");
   }
   if (c.maxLength !== undefined) input.maxLength = c.maxLength;
   input.setAttribute("aria-labelledby", labelId);
@@ -305,16 +319,16 @@ function buildField(schema: ValueSchema, labelId: string, onInput: () => void): 
   return {
     nodes: [input],
     control: input,
-    read: () => checkText(input.value, schema),
+    read: () => checkText(input.value, schema, t),
     write: (value) => {
       input.value = typeof value === "string" ? value : "";
     },
   };
 }
 
-function checkText(text: string, schema: ValueSchema): string {
+function checkText(text: string, schema: ValueSchema, t: Translate): string {
   const pattern = schema.constraints.pattern;
-  if (pattern !== undefined && !new RegExp(pattern.source, pattern.flags).test(text)) throw new Error(`The value must match /${pattern.source}/${pattern.flags}.`);
+  if (pattern !== undefined && !new RegExp(pattern.source, pattern.flags).test(text)) throw new Error(t("mustMatch", { pattern: `/${pattern.source}/${pattern.flags}` }));
   return text;
 }
 
@@ -332,16 +346,18 @@ function buildSwitch(schema: ValueSchema, labelId: string, context: EditorContex
   const error = el("p", "apb-error");
   error.setAttribute("role", "alert");
   const duration = durationSelect(schema, t);
-  const why = el("p", "apb-hint apb-disabled-reason");
-  why.hidden = true;
-  wrap.append(button, ...(duration === undefined ? [] : [duration]), hint, why, error);
+  const why = reasonField(schema.label, schema.reasonRequired === true, t);
+  const later = context.schedulable === true ? whenField(schema.label, t) : undefined;
+  const blockedNote = el("p", "apb-hint apb-disabled-reason");
+  blockedNote.hidden = true;
+  wrap.append(button, ...(duration === undefined ? [] : [duration]), hint, why.element, ...(later === undefined ? [] : [later.element]), blockedNote, error);
   let current = false;
   let armedUntil = 0;
   button.addEventListener("click", () => {
     const next = !current;
     if (schema.confirm && Date.now() > armedUntil) {
       armedUntil = Date.now() + ARM_MS;
-      hint.textContent = `Click again to turn it ${next ? "on" : "off"}.`;
+      hint.textContent = t(next ? "clickAgainOn" : "clickAgainOff");
       setTimeout(() => {
         if (Date.now() >= armedUntil) hint.textContent = "";
       }, ARM_MS + 50);
@@ -350,10 +366,20 @@ function buildSwitch(schema: ValueSchema, labelId: string, context: EditorContex
     armedUntil = 0;
     hint.textContent = "";
     error.textContent = "";
+    const reason = why.read();
+    let when: { at?: number | undefined; repeat?: RepeatRuleShape | undefined } = {};
+    try {
+      when = later?.read() ?? {};
+      if (schema.reasonRequired === true && reason === undefined) throw new Error(t("refuseReasonRequired", { label: schema.label }));
+    } catch (problem) {
+      error.textContent = problem instanceof Error ? problem.message : String(problem);
+      return;
+    }
     button.disabled = true;
-    context
-      .submit(next, duration === undefined || duration.value === "" ? undefined : Number(duration.value))
+    busy(button, context.submit(next, { revertAfterMs: duration === undefined || duration.value === "" ? undefined : Number(duration.value), at: when.at, repeat: when.repeat, reason }))
       .then((message) => {
+        why.clear();
+        later?.clear();
         if (message === undefined) {
           current = next;
           button.setAttribute("aria-checked", String(next));
@@ -377,8 +403,8 @@ function buildSwitch(schema: ValueSchema, labelId: string, context: EditorContex
     disable(reason) {
       blocked = reason !== undefined;
       disableAll(wrap, blocked);
-      why.hidden = !blocked;
-      why.textContent = reason === undefined ? "" : t("disabledBecause", { reason });
+      blockedNote.hidden = !blocked;
+      blockedNote.textContent = reason === undefined ? "" : t("disabledBecause", { reason });
     },
   };
 }

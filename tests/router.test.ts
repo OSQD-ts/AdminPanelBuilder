@@ -56,7 +56,7 @@ describe("every response", () => {
     }
   });
 
-  it("is an object with one named key, or { error, code } with a sentence and what kind of failure it is", async () => {
+  it("is an object with one named key, or { error, code, key, params }: a sentence, its kind, and how to say it in another language", async () => {
     const { panel } = fixture();
     const router = routerFor(panel);
     expect(Object.keys((await call(router, "GET", "/api/schema")).json)).toEqual(["schema"]);
@@ -65,7 +65,7 @@ describe("every response", () => {
     expect(Object.keys((await call(router, "GET", "/api/notices")).json)).toEqual(["notices"]);
     const missing = await call(router, "GET", "/api/nothing");
     expect(missing.status).toBe(404);
-    expect(missing.json).toEqual({ error: "there is nothing at /api/nothing", code: "not-found" });
+    expect(missing.json).toEqual({ error: "there is nothing at /api/nothing", code: "not-found", key: "refuseNothingAt", params: { path: "/api/nothing" } });
   });
 });
 
@@ -132,6 +132,9 @@ describe("authentication", () => {
     const cookie = (exchange.headers["set-cookie"] as string).split(";")[0] as string;
     expect((await call(router, "GET", "/admin/api/schema", { headers: { cookie } })).status).toBe(200);
     expect((await call(router, "GET", "/admin/?token=wrong-token-of-some-length")).status).toBe(401);
+    // Over TLS the credential is marked Secure, so the browser never sends it back over plain HTTP.
+    const overHttps = await call(router, "GET", `/admin/?token=${TOKEN}`, { headers: { "x-forwarded-proto": "https, http" } });
+    expect(overHttps.headers["set-cookie"]).toMatch(/^apb_token=.+; Path=\/admin; HttpOnly; SameSite=Strict; Secure$/);
   });
 
   it("challenges for basic credentials and admits the right ones", async () => {
@@ -261,9 +264,10 @@ describe("a listener that shows some groups", () => {
     const { panel } = fixture();
     const schema = (await call(routerFor(panel), "GET", "/api/schema")).json.schema;
     expect(schema.controls).toEqual({ edit: false, actions: false });
+    // The English sentence, and the key a page says it in the viewer's language with.
     expect(schema.restrictions).toEqual([
-      "Editing is switched off on this listener (controls.edit is not granted), so modifiable values are shown read-only.",
-      "Actions are switched off on this listener (controls.actions is not granted), so their buttons are disabled.",
+      { text: "Editing is switched off on this listener (controls.edit is not granted), so modifiable values are shown read-only.", key: "restrictionEditOff" },
+      { text: "Actions are switched off on this listener (controls.actions is not granted), so their buttons are disabled.", key: "restrictionActionsOff" },
     ]);
   });
 });
@@ -280,5 +284,52 @@ describe("state", () => {
     const next = (await call(router, "GET", `/api/state?since=${first.version}`)).json.state;
     expect(next.values.map((value: { id: string }) => value.id)).toEqual(["a", "c"]);
     expect((await call(router, "GET", "/api/state?since=abc")).status).toBe(400);
+  });
+});
+
+describe("what the router does when something under it goes wrong", () => {
+  it("answers 500 rather than rejecting into the host application, and reports it", async () => {
+    const errors: string[] = [];
+    const { panel } = panelAt(1_000_000, { onError: (_error, source) => errors.push(source) });
+    panel.viewable(1, "a");
+    // A panel whose method throws: an application's own getter, a store, a bug in a listener.
+    const broken = Object.create(panel) as typeof panel;
+    Object.assign(broken, {
+      changes: () => {
+        throw new Error("the change log is on fire");
+      },
+    });
+    const answer = await call(routerFor(broken), "GET", "/api/changes");
+    expect([answer.status, answer.json.code]).toEqual([500, "internal"]);
+    // Nothing of the failure itself reaches the caller; it goes to the error channel instead.
+    expect(answer.body).not.toContain("on fire");
+    expect(errors.some((source) => source.includes("GET /api/changes"))).toBe(true);
+  });
+
+  it("refuses an id that is not a path segment, and a table that fails", async () => {
+    const { panel } = panelAt();
+    panel.modifiable(1, { label: "Limit", group: "Game" });
+    panel.table("Rows", {
+      group: "Game",
+      columns: ["id"],
+      rows: () => {
+        throw new Error("the database said no");
+      },
+    });
+    const router = routerFor(panel, { auth: { token: TOKEN }, controls: { edit: true } });
+    // A half-written percent escape names no value, and is refused before anything is looked up.
+    expect((await call(router, "POST", "/api/values/%ZZ", { headers: jsonWrite, body: '{"value":2}' })).json).toMatchObject({ key: "refuseBadId" });
+    const failed = await call(router, "GET", "/api/tables/rows", { headers: bearer });
+    expect([failed.status, failed.json.key]).toEqual([502, "refuseTableFailed"]);
+  });
+
+  it("refuses a write whose Origin is not this panel's, however it is written", async () => {
+    const { panel } = panelAt();
+    panel.modifiable(1, { label: "Limit", group: "Game" });
+    const router = routerFor(panel, { auth: { token: TOKEN }, controls: { edit: true } });
+    const write = async (origin: string) => (await call(router, "POST", "/api/values/limit", { headers: { ...jsonWrite, origin }, body: '{"value":2}' })).json;
+    for (const origin of ["https://evil.example", "null", "http://[", "%%"]) expect(await write(origin)).toMatchObject({ key: "refuseCrossSite" });
+    // Its own origin, as a browser sends it, is the one that passes.
+    expect((await call(router, "POST", "/api/values/limit", { headers: { ...jsonWrite, origin: "http://127.0.0.1:9780" }, body: '{"value":2}' })).status).toBe(200);
   });
 });

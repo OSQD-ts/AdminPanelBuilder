@@ -19,15 +19,21 @@
  *   GET  /client-extras.js   its chart and table code, loaded only by panels that draw them
  *   GET  /api/schema         { schema }
  *   GET  /api/state          { state }    ?since=<version>&after=<ms>
+ *   GET  /api/stream         the same state as server-sent events, resuming from Last-Event-ID
  *   GET  /api/changes        { changes }
  *   GET  /api/notices        { notices }
  *   GET  /api/settings       { settings }
+ *   GET  /api/tables/:id     { table }    ?offset=&limit=&sort=&dir=&q=
  *   GET  /api/openapi.json   the OpenAPI document for all of this
+ *   GET  /healthz            "ok" without authentication, only with `health: true`
+ *   GET  /metrics            Prometheus exposition, behind the same auth, only with `metrics`
+ *   GET  /api/messages/:code { messages }: the page's words in another language, for a viewer who chose it
  *   POST /api/values/:id     { value }    body { "value": …, "at"?, "revertAfterMs"? }   needs controls.edit
  *   POST /api/actions/:id    { result }   body { "input"? }            needs controls.actions
  *   POST /api/schedules/:id/cancel, /api/profiles/:id, /api/pending/:id/(approve|reject),
  *        /api/changes/:id/undo, /api/settings/apply                    need controls.edit
  *   POST /api/settings/diff  { diff, unknown }                         changes nothing
+ *   POST /api/layout         { layout }   body { "layout": {…} | null } the layout for everybody; needs controls.edit
  *
  * A sign-in may carry grants that narrow the listener's scope for one operator; every route
  * below authentication uses that narrowed scope. Writes are limited per operator (`writeLimit`).
@@ -39,20 +45,23 @@ import { CLIENT_EXTRAS, CLIENT_SCRIPT } from "../client.generated.js";
 import type { ActionOutcome, AdminPanel, EditOutcome, PanelScope } from "../core.js";
 import { type Grants, narrowScope } from "../panel/scope.js";
 import { openApiDocument } from "./openapi.js";
+import { ENGLISH, format, LOCALES } from "../i18n/messages.js";
+import { type RefusalKey, refusal, REFUSAL_CODE } from "../i18n/refuse.js";
 import { renderMetrics } from "../metrics.js";
-import type { PanelSchema } from "../types.js";
+import type { PanelSchema, Restriction } from "../types.js";
 import { StreamHub } from "./stream.js";
 import { AdminPanelConfigError } from "../errors.js";
 import { type Clock, systemClock } from "../internal/clock.js";
 import { rejectUnknown } from "../internal/options.js";
 import { panelStylesheet, renderPage } from "../render/html.js";
 import { AuthThrottle, createAuthenticator, SharedThrottle, type Throttle, TOKEN_COOKIE } from "./auth.js";
+import { overTls } from "./session.js";
 import { BodyTooLargeError, type PanelRequest, type PanelResponse, type ServeOptions } from "./types.js";
 
 /** Largest request body read. An edit is one value; 64 KB is a long text field with room to spare. */
 export const MAX_BODY_BYTES = 64 * 1024;
 
-const SERVE_KEYS = ["basePath", "auth", "controls", "groups", "allowedHosts", "authThrottle", "clock", "stream", "metrics", "writeLimit"];
+const SERVE_KEYS = ["basePath", "auth", "controls", "groups", "allowedHosts", "authThrottle", "clock", "stream", "metrics", "writeLimit", "health"];
 
 /** Writes one operator may make a minute by default: an operator clicking fast, not a script gone wrong. */
 export const DEFAULT_WRITES_PER_MINUTE = 60;
@@ -125,18 +134,19 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
   let warnedGroups = false;
 
   function scope(): PanelScope {
-    const restrictions: string[] = [];
+    const restrictions: Restriction[] = [];
     const counts = panel.counts();
-    if (!anyEdit && counts.editable > 0) restrictions.push("Editing is switched off on this listener (controls.edit is not granted), so modifiable values are shown read-only.");
-    else if (edit instanceof Set) restrictions.push(`Editing is allowed here only in ${[...edit].map((name) => `"${name}"`).join(", ")}.`);
-    if (!anyActions && counts.actions > 0) restrictions.push("Actions are switched off on this listener (controls.actions is not granted), so their buttons are disabled.");
-    else if (actions instanceof Set) restrictions.push(`Actions can be run here only in ${[...actions].map((name) => `"${name}"`).join(", ")}.`);
+    const named = (groups: ReadonlySet<string>): string => [...groups].map((name) => `"${name}"`).join(", ");
+    if (!anyEdit && counts.editable > 0) restrictions.push(restriction("restrictionEditOff"));
+    else if (edit instanceof Set) restrictions.push(restriction("restrictionEditGroups", { groups: named(edit) }));
+    if (!anyActions && counts.actions > 0) restrictions.push(restriction("restrictionActionsOff"));
+    else if (actions instanceof Set) restrictions.push(restriction("restrictionActionsGroups", { groups: named(actions) }));
     if (groups !== undefined && !warnedGroups) {
       const known = new Set(panel.groupNames());
       const unknown = [...groups].filter((name) => !known.has(name));
       if (unknown.length > 0) {
         warnedGroups = true;
-        panel.notice("warning", `listener-groups-${unknown.join(",")}`, `${where} lists ${unknown.map((name) => `"${name}"`).join(", ")} in groups, but nothing has been declared in ${unknown.length === 1 ? "that group" : "those groups"}, so ${unknown.length === 1 ? "it shows" : "they show"} nothing.`);
+        panel.notice("warning", `listener-groups-${unknown.join(",")}`, unknown.length === 1 ? "noticeListenerGroupOne" : "noticeListenerGroupMany", { where, names: unknown.map((name) => `"${name}"`).join(", ") });
       }
     }
     return { groups, edit, actions, restrictions };
@@ -147,7 +157,7 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
       return await handle(request);
     } catch (error) {
       panel.reportError(error, `${where} answering ${request.method} ${request.url.split("?")[0]}`);
-      return json(500, { error: "the panel failed to answer this request; the application's own log has the details" });
+      return json(500, fail("refuseInternal"));
     }
   }
 
@@ -157,14 +167,20 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
 
     if (throttle !== undefined) {
       const wait = await throttle.retryAfter(request.address);
-      if (wait > 0) return withHeaders(json(429, { error: "too many failed sign-ins from this address; try again later" }), { "retry-after": String(wait) });
+      if (wait > 0) return withHeaders(json(429, fail("refuseThrottled")), { "retry-after": String(wait) });
     }
     if (allowedHosts !== undefined) {
       const host = (request.headers.host ?? "").toLowerCase();
-      if (!allowedHosts.has(host) && !allowedHosts.has(host.replace(/:\d+$/, ""))) return json(421, { error: "this panel does not answer to that host name" });
+      if (!allowedHosts.has(host) && !allowedHosts.has(host.replace(/:\d+$/, ""))) return json(421, fail("refuseHost"));
+    }
+    // Health answers before authentication, and only the Host check above guards it: a load
+    // balancer has no credentials, and what it is told is only whether the process answers.
+    if (options.health === true && path === "/healthz" && (method === "GET" || method === "HEAD")) {
+      const warnings = panel.notices().filter((notice) => notice.level === "warning").length;
+      return { status: 200, headers: { ...SECURITY_HEADERS, "content-type": "text/plain; charset=utf-8" }, body: warnings === 0 ? "ok" : `ok, ${warnings} warning${warnings === 1 ? "" : "s"}` };
     }
     const unsafe = method !== "GET" && method !== "HEAD";
-    if (unsafe && !sameOrigin(request)) return json(403, { error: "a write must come from the panel's own page: this request came from another site" });
+    if (unsafe && !sameOrigin(request)) return json(403, fail("refuseCrossSite"));
 
     // Exchanging `?token=` for a cookie happens before authentication, because it is how a
     // browser that cannot send a header authenticates at all.
@@ -172,7 +188,7 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
       const name = await authenticator.isToken(query.get("token") ?? "");
       if (name === undefined) {
         await throttle?.fail(request.address);
-        return json(401, { error: "that token is not valid for this panel" });
+        return json(401, fail("refuseBadToken"));
       }
       await throttle?.succeed(request.address);
       return {
@@ -180,7 +196,9 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
         headers: {
           ...SECURITY_HEADERS,
           location: `${basePath}/`,
-          "set-cookie": `${TOKEN_COOKIE}=${encodeURIComponent(query.get("token") ?? "")}; Path=${basePath || "/"}; HttpOnly; SameSite=Strict`,
+          // `Secure` where the browser is on TLS: the cookie is a credential, and one sent back over
+          // plain HTTP to the same host is a credential given away.
+          "set-cookie": `${TOKEN_COOKIE}=${encodeURIComponent(query.get("token") ?? "")}; Path=${basePath || "/"}; HttpOnly; SameSite=Strict${overTls(request) ? "; Secure" : ""}`,
         },
         body: "",
       };
@@ -189,17 +207,17 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
     const result = await authenticator.authenticate({ method, path, headers: request.headers, address: request.address });
     if (authenticator.handle !== undefined && path.startsWith("/auth/")) {
       try {
-        const answered = await authenticator.handle({ method, path, query, headers: request.headers, address: request.address, basePath }, result.ok ? result.actor : undefined);
+        const answered = await authenticator.handle({ method, path, query, headers: request.headers, address: request.address, basePath, secure: overTls(request) }, result.ok ? result.actor : undefined);
         if (answered !== undefined) return { ...answered, headers: { ...SECURITY_HEADERS, ...answered.headers } };
       } catch (error) {
         panel.reportError(error, "signing in");
-        return json(502, { error: "the sign-in provider could not be reached; try again shortly" });
+        return json(502, fail("refuseProviderDown"));
       }
     }
     if (!result.ok) {
       await throttle?.fail(request.address);
       if (result.redirect !== undefined && method === "GET" && path === "/") return { status: 302, headers: { ...SECURITY_HEADERS, location: `${basePath}/${result.redirect}`, ...(result.setCookie === undefined ? {} : { "set-cookie": result.setCookie }) }, body: "" };
-      const response = json(401, { error: "sign in to see this panel" });
+      const response = json(401, fail("refuseSignIn"));
       return result.challenge === undefined ? response : withHeaders(response, { "www-authenticate": result.challenge });
     }
     await throttle?.succeed(request.address);
@@ -213,7 +231,7 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
         case "/":
           return page(mine());
         case "/panel.css":
-          return { status: 200, headers: { ...SECURITY_HEADERS, "content-type": "text/css; charset=utf-8" }, body: panelStylesheet(panel.currentTheme()) };
+          return { status: 200, headers: { ...SECURITY_HEADERS, "content-type": "text/css; charset=utf-8" }, body: panelStylesheet(panel.currentTheme(), panel.offeredThemes()) };
         case "/client.js":
           return { status: 200, headers: { ...SECURITY_HEADERS, "content-type": "text/javascript; charset=utf-8" }, body: CLIENT_SCRIPT };
         case "/client-extras.js":
@@ -223,7 +241,7 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
         case "/api/settings":
           return json(200, { settings: panel.exportSettings(mine()) });
         case "/api/openapi.json":
-          return json(200, openApiDocument(basePath));
+          return json(200, openApiDocument(basePath, { health: options.health === true, metrics: metrics !== undefined }));
         case "/api/state":
         case "/api/stream": {
           // A reconnecting EventSource says where it got to in Last-Event-ID, which beats the query it first opened with.
@@ -231,9 +249,10 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
           const since = resumed?.since ?? readCount(query.get("since"));
           const after = resumed?.after ?? readCount(query.get("after"));
           const feed = resumed?.feed ?? readCount(query.get("feed"));
-          if (since === null || after === null || feed === null) return json(400, { error: "since, after and feed must be whole numbers" });
+          if (since === null || after === null || feed === null) return json(400, fail("refusePosition"));
           if (path === "/api/state") return json(200, { state: panel.state(mine(), since, after, feed) });
-          if (streams === undefined) return json(404, { error: "this listener does not stream; poll /api/state instead" });
+          if (streams === undefined) return json(404, fail("refuseNoStream"));
+          if (streams.full) return withHeaders(json(503, fail("refuseTooManyViewers", { max: streams.limit })), { "retry-after": "30" });
           return withHeaders(streams.openStream(mine, since, after, feed, panel.schema(mine()).pollMs), { ...SECURITY_HEADERS, "cache-control": "no-store, no-transform" });
         }
         case "/api/changes":
@@ -241,92 +260,111 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
         case "/api/notices":
           return json(200, { notices: panel.notices() });
         case "/metrics":
-          if (metrics === undefined) return json(404, { error: `there is nothing at ${path}` });
+          if (metrics === undefined) return json(404, fail("refuseNothingAt", { path }));
           return { status: 200, headers: { ...SECURITY_HEADERS, "content-type": "text/plain; version=0.0.4; charset=utf-8" }, body: renderMetrics(panel, mine(), metrics.prefix) };
         default: {
           const table = /^\/api\/tables\/([^/]+)$/.exec(path);
           if (table !== null) return tablePage(decodeSegment(table[1] as string), query, mine());
-          if (/^\/api\/(values|actions|profiles|pending|changes|tables|schedules|settings)\//.test(path)) return withHeaders(json(405, { error: "this path only accepts POST" }), { allow: "POST" });
-          return json(404, { error: `there is nothing at ${path}` });
+          const language = /^\/api\/messages\/([a-z]{2,3})$/.exec(path);
+          if (language !== null) {
+            const messages = LOCALES[language[1] as string];
+            return messages === undefined ? json(404, fail("refuseNothingAt", { path })) : json(200, { messages });
+          }
+          if (/^\/api\/(values|actions|profiles|pending|changes|tables|schedules|settings)\//.test(path)) return withHeaders(json(405, fail("refusePostOnly")), { allow: "POST" });
+          return json(404, fail("refuseNothingAt", { path }));
         }
       }
     }
 
-    if (method !== "POST") return withHeaders(json(405, { error: `${method} is not used by this panel` }), { allow: "GET, POST" });
+    if (method !== "POST") return withHeaders(json(405, fail("refuseMethod", { method })), { allow: "GET, POST" });
     const write = matchWrite(path);
     if (write === undefined) {
-      if (path === "/" || path.startsWith("/api/")) return withHeaders(json(405, { error: "this path is read-only" }), { allow: "GET" });
-      return json(404, { error: `there is nothing at ${path}` });
+      if (path === "/" || path.startsWith("/api/")) return withHeaders(json(405, fail("refuseReadOnly")), { allow: "GET" });
+      return json(404, fail("refuseNothingAt", { path }));
     }
-    if (write.ids.some((id) => id === undefined)) return json(400, { error: "an id in the path is not valid percent-encoding" });
+    if (write.ids.some((id) => id === undefined)) return json(400, fail("refuseBadId"));
     const needs = write.kind === "action" || write.kind === "row-action" ? "actions" : write.kind === "diff" ? "nothing" : "edit";
-    if (needs === "edit" && !anyEdit) return json(403, { error: "editing is switched off on this listener; it is granted with controls: { edit: true }" });
-    if (needs === "actions" && !anyActions) return json(403, { error: "actions are switched off on this listener; they are granted with controls: { actions: true }" });
+    if (needs === "edit" && !anyEdit) return json(403, fail("refuseEditSwitchedOff", { edit: "{ edit: true }" }));
+    if (needs === "actions" && !anyActions) return json(403, fail("refuseActionsSwitchedOff", { actions: "{ actions: true }" }));
     // An HTML form cannot send this content type, so a forged form fails here whatever
     // credentials the browser attaches to it.
-    if (!(request.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(415, { error: "a write must be sent as application/json" });
+    if (!(request.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return json(415, fail("refuseJsonOnly"));
     let body: Record<string, unknown>;
     try {
       const text = await request.body(MAX_BODY_BYTES);
       const parsed: unknown = text === "" ? {} : JSON.parse(text);
-      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return json(400, { error: "the body must be a JSON object" });
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return json(400, fail("refuseBodyObject"));
       body = parsed as Record<string, unknown>;
     } catch (error) {
-      if (error instanceof BodyTooLargeError) return json(413, { error: `the body is larger than ${MAX_BODY_BYTES / 1024} KB` });
-      return json(400, { error: "the body is not valid JSON" });
+      if (error instanceof BodyTooLargeError) return json(413, fail("refuseBodyTooLarge", { kb: MAX_BODY_BYTES / 1024 }));
+      return json(400, fail("refuseBodyJson"));
     }
     const [first, second] = write.ids as string[];
     const current = mine();
     if (needs !== "nothing") {
       const wait = writes?.take(actor);
-      if (wait !== undefined && wait > 0) return withHeaders(json(429, { error: `${actor} has made too many changes in the last minute; wait a moment` }), { "retry-after": String(wait) });
+      if (wait !== undefined && wait > 0) return withHeaders(json(429, fail("refuseTooManyChanges", { actor })), { "retry-after": String(wait) });
     }
+    const reason = body.reason;
+    if (reason !== undefined && typeof reason !== "string") return json(400, fail("refuseReasonText"));
+    const repeat = body.repeat;
+    if (repeat !== undefined && (repeat === null || typeof repeat !== "object" || Array.isArray(repeat))) return json(400, fail("refuseRepeatShape"));
     switch (write.kind) {
       case "value": {
-        if (!Object.hasOwn(body, "value")) return json(400, { error: 'the body must carry the new value as { "value": … }' });
+        if (!Object.hasOwn(body, "value")) return json(400, fail("refuseNeedsValue", { shape: '{ "value": … }' }));
         const revert = body.revertAfterMs;
-        if (revert !== undefined && typeof revert !== "number") return json(400, { error: "revertAfterMs must be a number of milliseconds" });
+        if (revert !== undefined && typeof revert !== "number") return json(400, fail("refuseRevertNumber"));
         const at = readTime(body.at);
-        if (at === null) return json(400, { error: "at must be a time: milliseconds since 1970, or an ISO 8601 date" });
+        if (at === null) return json(400, fail("refuseAtTime"));
         const refused = await panel.checkAsync([[first as string, body.value]]);
-        if (refused !== undefined && visibleValue(first as string, current)) return json(400, { error: refused });
-        return editAnswer(panel.edit(first as string, body.value, actor, current, { revertAfterMs: revert as number | undefined, at }));
+        if (refused !== undefined && visibleValue(first as string, current)) return json(400, fail("refuseApp", { message: refused }));
+        return editAnswer(panel.edit(first as string, body.value, actor, current, { revertAfterMs: revert as number | undefined, at, reason, repeat: repeat as never }));
       }
       case "cancel":
         return editAnswer(panel.cancelScheduled(first as string, actor, current));
       case "profile": {
         const refused = await panel.checkAsync(panel.candidatesFor("profile", first as string));
-        if (refused !== undefined) return json(400, { error: refused });
-        return editAnswer(panel.applyProfile(first as string, actor, current));
+        if (refused !== undefined) return json(400, fail("refuseApp", { message: refused }));
+        const revert = body.revertAfterMs;
+        if (revert !== undefined && typeof revert !== "number") return json(400, fail("refuseRevertNumber"));
+        const at = readTime(body.at);
+        if (at === null) return json(400, fail("refuseAtTime"));
+        return editAnswer(panel.applyProfile(first as string, actor, current, { revertAfterMs: revert as number | undefined, at, reason, repeat: repeat as never }));
       }
       case "approve": {
         const refused = await panel.checkAsync(panel.candidatesFor("pending", first as string));
-        if (refused !== undefined) return json(400, { error: refused });
-        return editAnswer(panel.approve(first as string, actor, current));
+        if (refused !== undefined) return json(400, fail("refuseApp", { message: refused }));
+        return decisionAnswer(await panel.approve(first as string, actor, current));
       }
       case "reject":
-        return editAnswer(panel.reject(first as string, actor, current));
+        return editAnswer(await panel.reject(first as string, actor, current, { reason }));
       case "undo": {
         const changeId = Number(first);
-        if (!Number.isInteger(changeId)) return json(400, { error: "a change id is a whole number" });
+        if (!Number.isInteger(changeId)) return json(400, fail("refuseChangeId"));
         const refused = await panel.checkAsync(panel.candidatesFor("undo", String(changeId)));
-        if (refused !== undefined) return json(400, { error: refused });
-        return editAnswer(panel.undo(changeId, actor, current));
+        if (refused !== undefined) return json(400, fail("refuseApp", { message: refused }));
+        return editAnswer(panel.undo(changeId, actor, current, { reason }));
       }
       case "diff":
         return json(200, panel.diffSettings(body.settings, current));
       case "import": {
         const settings = body.settings;
-        if (settings === null || typeof settings !== "object" || Array.isArray(settings)) return json(400, { error: 'the body must carry the settings as { "settings": { id: value, … } }' });
+        if (settings === null || typeof settings !== "object" || Array.isArray(settings)) return json(400, fail("refuseNeedsSettings", { shape: '{ "settings": { id: value, … } }' }));
         const refused = await panel.checkAsync(Object.entries(settings as Record<string, unknown>));
-        if (refused !== undefined) return json(400, { error: `nothing was imported: ${refused}` });
-        const outcome = panel.importSettings(settings, actor, current);
-        return outcome.ok ? json(200, { changed: outcome.changed ?? 0 }) : json(STATUS_OF[outcome.reason], { error: outcome.message });
+        if (refused !== undefined) return json(400, fail("refuseNotImported", { reason: refused }));
+        const outcome = panel.importSettings(settings, actor, current, { reason });
+        return outcome.ok ? json(200, { changed: outcome.changed ?? 0 }) : editAnswer(outcome);
+      }
+      case "layout": {
+        if (!("layout" in body)) return json(400, fail("refuseNeedsLayout", { shape: '{ "layout": { "<group id>": { "order": ["value:<id>", …], "sizes": { "value:<id>": { "w": 3, "h": 2 } } } } }' }));
+        const outcome = panel.saveLayout(body.layout, actor, current, { reason });
+        if (!outcome.ok) return json(STATUS_OF[outcome.reason], { error: outcome.message, code: outcome.reason, ...(outcome.refusal === undefined ? {} : { key: outcome.refusal.key, params: outcome.refusal.params }) });
+        return json(200, { layout: panel.schema(current).layout ?? null });
       }
       case "action":
-        return actionAnswer(await panel.run(first as string, actor, current, body.input));
+        return actionAnswer(await panel.run(first as string, actor, current, body.input, { reason }));
       case "row-action": {
-        if (typeof body.row !== "string") return json(400, { error: 'a row action needs the row as { "row": "<id>" }' });
+        if (typeof body.row !== "string") return json(400, fail("refuseNeedsRow", { shape: '{ "row": "<id>" }' }));
         return actionAnswer(await panel.runRowAction(first as string, second as string, body.row, actor, current));
       }
     }
@@ -338,23 +376,28 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
   }
 
   function actionAnswer(outcome: ActionOutcome): PanelResponse {
-    if (outcome.ok) return json(200, { result: { message: outcome.message } });
-    return json(STATUS_OF[outcome.reason], { error: outcome.message, code: outcome.reason });
+    if (outcome.ok) return "pending" in outcome ? json(202, { pending: outcome.pending }) : json(200, { result: { message: outcome.message } });
+    return json(STATUS_OF[outcome.reason], { error: outcome.message, code: outcome.reason, ...(outcome.refusal === undefined ? {} : { key: outcome.refusal.key, params: outcome.refusal.params }) });
+  }
+
+  /** An approval's answer: a value's or a profile's change, or an action's run. */
+  function decisionAnswer(outcome: EditOutcome | ActionOutcome): PanelResponse {
+    return outcome.ok && "message" in outcome ? actionAnswer(outcome) : editAnswer(outcome as EditOutcome);
   }
 
   async function tablePage(id: string | undefined, query: URLSearchParams, current: PanelScope): Promise<PanelResponse> {
-    if (id === undefined) return json(400, { error: "the id in the path is not valid percent-encoding" });
+    if (id === undefined) return json(400, fail("refuseBadId"));
     const offset = readCount(query.get("offset"));
     const limit = readCount(query.get("limit"));
     const direction = query.get("dir");
-    if (offset === null || limit === null || (direction !== null && direction !== "asc" && direction !== "desc")) return json(400, { error: "offset and limit are whole numbers, and dir is asc or desc" });
+    if (offset === null || limit === null || (direction !== null && direction !== "asc" && direction !== "desc")) return json(400, fail("refuseTableQuery"));
     try {
       const answer = await panel.tableRows(id, { offset, limit, sort: query.get("sort") ?? undefined, direction: direction ?? "asc", search: query.get("q") ?? "" }, current);
-      if (answer === undefined) return json(404, { error: `there is no table "${id}" on this panel` });
+      if (answer === undefined) return json(404, fail("refuseNoTable", { id }));
       return json(200, { table: answer });
     } catch (error) {
       panel.reportError(error, `the table "${id}"`);
-      return json(502, { error: `the table could not be read: ${error instanceof Error ? error.message : String(error)}` });
+      return json(502, fail("refuseTableFailed", { detail: error instanceof Error ? error.message : String(error) }));
     }
   }
 
@@ -380,7 +423,7 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
 
   function page(current: PanelScope): PanelResponse {
     const nonce = createNonce();
-    const body = renderPage({ bootstrap: { schema: schemaFor(current), state: panel.state(current) }, theme: panel.currentTheme(), nonce, api: basePath });
+    const body = renderPage({ bootstrap: { schema: schemaFor(current), state: panel.state(current) }, theme: panel.currentTheme(), themes: panel.offeredThemes(), nonce, api: basePath });
     // Built from `default-src 'none'`: everything the page may do is listed, and nothing else.
     // `connect-src 'self'` for the polling; no fonts, images or frames from anywhere.
     const csp = `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
@@ -390,7 +433,10 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
   return { route, basePath, scope };
 }
 
-type WriteKind = "value" | "cancel" | "profile" | "approve" | "reject" | "undo" | "action" | "row-action" | "diff" | "import";
+/** The keys `restriction()` may be given: the page's words about a listener's limits. */
+type RefusalOrNote = "restrictionEditOff" | "restrictionEditGroups" | "restrictionActionsOff" | "restrictionActionsGroups" | "restrictionGrants";
+
+type WriteKind = "value" | "cancel" | "profile" | "approve" | "reject" | "undo" | "action" | "row-action" | "diff" | "import" | "layout";
 
 /** The write paths, and the ids in them, decoded. */
 function matchWrite(path: string): { kind: WriteKind; ids: Array<string | undefined> } | undefined {
@@ -405,6 +451,7 @@ function matchWrite(path: string): { kind: WriteKind; ids: Array<string | undefi
     [/^\/api\/schedules\/([^/]+)\/cancel$/, "cancel"],
     [/^\/api\/settings\/diff$/, "diff"],
     [/^\/api\/settings\/apply$/, "import"],
+    [/^\/api\/layout$/, "layout"],
   ];
   for (const [pattern, kind] of patterns) {
     const match = pattern.exec(path);
@@ -435,11 +482,21 @@ function checkPrefix(prefix: string, where: string): string {
   return prefix;
 }
 
-/** What a failure is, for a caller that branches on it or a page that says it in another language. */
-const CODE_OF: Record<number, string> = { 400: "invalid", 401: "unauthenticated", 403: "not-allowed", 404: "not-found", 405: "method", 409: "conflict", 413: "too-large", 415: "media-type", 421: "wrong-host", 429: "rate-limited", 500: "internal", 502: "failed", 503: "busy" };
+/** A sentence about what this listener does not allow: the English, and the key a page says it with. */
+function restriction(key: RefusalOrNote, params: Record<string, string | number> = {}): Restriction {
+  const made: Restriction = { text: format(ENGLISH[key], params), key };
+  if (Object.keys(params).length > 0) made.params = params;
+  return made;
+}
+
+/** A refusal body: the English sentence, and the key and parameters a page translates it with. */
+function fail(key: RefusalKey, params: Record<string, string | number> = {}): { error: string; key: string; params: Record<string, string | number> } {
+  const made = refusal(key, params);
+  return { error: made.message, key, params };
+}
 
 function json(status: number, body: object): PanelResponse {
-  if ("error" in body && !("code" in body)) body = { ...body, code: CODE_OF[status] ?? "failed" };
+  if ("error" in body && !("code" in body)) body = { ...body, code: REFUSAL_CODE[status] ?? "failed" };
   return { status, headers: { ...SECURITY_HEADERS, "content-type": "application/json; charset=utf-8", "content-security-policy": "default-src 'none'; frame-ancestors 'none'" }, body: JSON.stringify(body) };
 }
 
@@ -526,7 +583,7 @@ function createWriteLimit(options: ServeOptions["writeLimit"], clock: Clock, whe
 function narrowed(scope: PanelScope, grants: Grants | undefined): PanelScope {
   if (grants === undefined) return scope;
   const out = narrowScope(scope, grants);
-  return { ...out, restrictions: [...out.restrictions, "Your sign-in narrows what you may see and do here below what this listener allows."] };
+  return { ...out, restrictions: [...out.restrictions, restriction("restrictionGrants")] };
 }
 
 /** `v.a.f`: the version, sample time and feed sequence a stream frame brought the page to. */

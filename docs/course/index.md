@@ -20,6 +20,8 @@ next?".
 | [6. Inside your application](06-inside-your-application.md) | Mounting on a path, your own sign-in, a second listener. |
 | [7. Changes you can answer for](07-changes-you-can-answer-for.md) | Timed changes, approvals, undo, the change log. |
 | [8. Operating it](08-operating-it.md) | Persistence, metrics, the command line, and a checklist. |
+| [9. Planned and explained](09-planned-and-explained.md) | Changes for later and on a rule, reasons, conditions, alerts. |
+| [10. More than one](10-more-than-one.md) | Replicas, a fleet page, a configuration file, other languages. |
 
 ## Related
 

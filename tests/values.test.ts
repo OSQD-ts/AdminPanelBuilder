@@ -97,6 +97,36 @@ describe("the three sources", () => {
     expect(panel.notices().some((notice) => notice.id === "getter-broken")).toBe(true);
   });
 
+  it("says what it could not read, and the notice about it, in words a page can translate", async () => {
+    const { ENGLISH, LOCALES, format } = await import("../src/i18n/messages.js");
+    const GERMAN = LOCALES.de as Record<string, string>;
+    const { panel } = panelAt();
+    panel.viewable(() => {
+      throw new Error("database is down");
+    }, "Broken");
+    const wire = panel.state().values.find((value) => value.id === "broken") as { error: string; errorKey: string; errorParams: Record<string, string> };
+    // The English sentence for every caller that has always read it, and the parts beside it.
+    expect(wire.error).toBe("reading Broken failed: database is down");
+    expect([wire.errorKey, wire.errorParams]).toEqual(["readFailed", { label: "Broken", reason: "database is down" }]);
+    expect(format(ENGLISH[wire.errorKey as "readFailed"], wire.errorParams)).toBe(wire.error);
+    // A page in another language says the frame in it; the application's own words stay as they are.
+    expect(format(GERMAN[wire.errorKey] as string, wire.errorParams)).toBe("Broken konnte nicht gelesen werden: database is down");
+    const notice = panel.notices().find((entry) => entry.id === "getter-broken") as { message: string; key: string; params: Record<string, string> };
+    expect([notice.key, notice.params]).toEqual(["noticeGetterThrew", { label: "Broken", reason: "database is down" }]);
+    expect(format(ENGLISH[notice.key as "noticeGetterThrew"], notice.params)).toBe(notice.message);
+    expect(format(GERMAN[notice.key] as string, notice.params)).toMatch(/^Das Lesen von Broken hat einen Fehler geworfen: database is down\./);
+  });
+
+  it("leaves words it did not write itself as they are: an alert's sentence reads the same everywhere", () => {
+    const { panel, clock } = panelAt();
+    panel.viewable(100, { label: "Heat", status: { warn: 50, bad: 90 }, alert: {} });
+    clock.advance(1000);
+    panel.tick();
+    const notice = panel.notices().find((entry) => entry.id === "alert-heat");
+    expect(notice?.message).toMatch(/Heat is bad: 100/);
+    expect(notice?.key).toBeUndefined();
+  });
+
   it("refuses a modifiable function, which has nowhere to put a new value", () => {
     const { panel } = panelAt();
     expect(() => panel.modifiable((() => 1) as never, "fn")).toThrow(/was given a function/);

@@ -11,16 +11,31 @@
  * ("a thinned feed must never look like a quiet one"); a viewer stuck for `LAG_LIMIT_MS` is closed
  * and its page reconnects. A comment every `HEARTBEAT_MS` keeps proxies from closing an idle stream.
  * Every timer is unref'd.
+ *
+ * Viewers share frames. Fifty pages open on one listener, as one operator, are at the same position
+ * after their first frame, so the state they are sent is the same state: it is computed and
+ * serialised once per frame interval for each (scope, position) and handed to every viewer there.
+ * The cost of a stream then grows with the number of distinct views, not the number of viewers.
  */
 import type { AdminPanel, PanelScope } from "../core.js";
+import type { PanelState } from "../types.js";
 import { AdminPanelConfigError } from "../errors.js";
 import type { PanelResponse, StreamOptions } from "./types.js";
 
 const HEARTBEAT_MS = 15_000;
 const LAG_LIMIT_MS = 20_000;
 
+/** A frame computed once and sent to every viewer at the same scope and position. */
+interface Frame {
+  state: PanelState;
+  /** The event, serialised once. */
+  text: string;
+}
+
 export class StreamHub {
   private viewers = 0;
+  private frames = new Map<string, Frame>();
+  private framesAt = 0;
   private readonly maxViewers: number;
   private readonly frameMs: number;
 
@@ -41,12 +56,38 @@ export class StreamHub {
     return this.viewers;
   }
 
-  /** @internal The router calls this for `/api/stream`. */
-  openStream(scope: () => PanelScope, since: number | undefined, after: number | undefined, feed: number | undefined, pollMs: number): PanelResponse {
-    if (this.viewers >= this.maxViewers) {
-      return { status: 503, headers: { "content-type": "application/json; charset=utf-8", "retry-after": "30" }, body: JSON.stringify({ error: `this panel already streams to ${this.maxViewers} viewers; this page polls instead` }) };
+  /**
+   * The state since a position, and its event text, shared by every viewer asking for the same one
+   * within half a frame interval. Public for the read-path benchmark.
+   */
+  frame(scope: PanelScope, since: number | undefined, after: number | undefined, feed: number | undefined): Frame {
+    const now = Date.now();
+    if (now - this.framesAt >= this.frameMs / 2) {
+      this.frames.clear();
+      this.framesAt = now;
     }
-    const panel = this.panel;
+    const key = `${scopeKey(scope)}|${since}|${after}|${feed}`;
+    let frame = this.frames.get(key);
+    if (frame === undefined) {
+      const state = this.panel.state(scope, since, after, feed);
+      frame = { state, text: `id: ${state.version}.${state.now}.${state.feedSeq}\nevent: state\ndata: ${JSON.stringify(state)}\n\n` };
+      this.frames.set(key, frame);
+    }
+    return frame;
+  }
+
+  /** Streams open at once, for the refusal the router writes when there is no room for another. */
+  get limit(): number {
+    return this.maxViewers;
+  }
+
+  /** Whether another viewer would be one too many. */
+  get full(): boolean {
+    return this.viewers >= this.maxViewers;
+  }
+
+  /** @internal The router calls this for `/api/stream`, having checked `full`. */
+  openStream(scope: () => PanelScope, since: number | undefined, after: number | undefined, feed: number | undefined, pollMs: number): PanelResponse {
     const frameMs = this.frameMs;
     return {
       status: 200,
@@ -74,8 +115,7 @@ export class StreamHub {
               return;
             }
             stuckSince = undefined;
-            const current = scope();
-            const state = panel.state(current, lastVersion, lastAfter, lastFeed);
+            const { state, text } = this.frame(scope(), lastVersion, lastAfter, lastFeed);
             const changed = state.version !== lastVersion || state.feedSeq !== lastFeed || state.structure !== lastStructure;
             if (changed || now - lastSent >= pollMs) {
               if (skipped > 0) {
@@ -83,7 +123,7 @@ export class StreamHub {
                 skipped = 0;
               }
               // The id lets a reconnecting EventSource resume where it was rather than from the start.
-              sink.send(`id: ${state.version}.${state.now}.${state.feedSeq}\nevent: state\ndata: ${JSON.stringify(state)}\n\n`);
+              sink.send(text);
               lastVersion = state.version;
               lastAfter = state.now;
               lastFeed = state.feedSeq;
@@ -111,4 +151,10 @@ export class StreamHub {
       },
     };
   }
+}
+
+/** A scope as a string two equal scopes share: the groups shown and the powers granted, sorted. */
+export function scopeKey(scope: PanelScope): string {
+  const list = (value: boolean | ReadonlySet<string> | undefined): string => (value === undefined ? "*" : typeof value === "boolean" ? String(value) : [...value].sort().join(","));
+  return `${list(scope.groups)};${list(scope.edit)};${list(scope.actions)}`;
 }

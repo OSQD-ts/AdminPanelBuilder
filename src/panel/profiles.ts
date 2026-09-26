@@ -6,7 +6,7 @@
  * answers what a scope may see of it and whether it is in force.
  */
 import { AdminPanelConfigError } from "../errors.js";
-import type { ProfileSchema, Span } from "../types.js";
+import type { CardSize, ProfileSchema, Span } from "../types.js";
 import type { PanelValue } from "../values/handle.js";
 import { toJson } from "../values/kinds.js";
 import { message, sameJson } from "./checks.js";
@@ -22,6 +22,14 @@ export interface ProfileEntry {
   order: number;
   sequence: number;
   span: Span | undefined;
+  size: CardSize | undefined;
+  approval: boolean;
+  reasonRequired: boolean;
+}
+
+/** Whether a scope may apply every value a profile sets; a profile is applied whole or not at all. */
+export function profileWritable(profile: ProfileEntry, scope: PanelScope): boolean {
+  return profile.settings.every(([value]) => visible(scope, value.group) && canEdit(scope, value.group));
 }
 
 export function checkProfileSettings(label: string, settings: ReadonlyArray<readonly [PanelValue<unknown>, unknown]>, assertOwn: (value: PanelValue<unknown>, where: string) => void): void {
@@ -42,7 +50,7 @@ export function checkProfileSettings(label: string, settings: ReadonlyArray<read
 }
 
 export function profileSchema(profile: ProfileEntry, scope: PanelScope): ProfileSchema {
-  const writable = profile.settings.every(([value]) => visible(scope, value.group) && canEdit(scope, value.group));
+  const writable = profileWritable(profile, scope);
   const schema: ProfileSchema = {
     type: "profile",
     id: profile.id,
@@ -55,6 +63,9 @@ export function profileSchema(profile: ProfileEntry, scope: PanelScope): Profile
   };
   if (profile.description !== undefined) schema.description = profile.description;
   if (profile.span !== undefined) schema.span = profile.span;
+  if (profile.size !== undefined) schema.size = profile.size;
+  if (profile.approval) schema.approval = true;
+  if (profile.reasonRequired) schema.reasonRequired = true;
   return schema;
 }
 

@@ -58,6 +58,22 @@ describe("signing in with OpenID Connect", () => {
     expect(schema.status).toBe(200);
   });
 
+  it("marks its cookies Secure when the browser is on TLS, and not when it is not", async () => {
+    const { panel } = panelAt();
+    panel.viewable(1, "a");
+    const idp = await provider((nonce) => ({ iss: ISSUER, aud: "panel", exp: now() + 300, nonce, email: "ada@example.com" }));
+    const router = routerFor(panel, { basePath: "/admin", auth: { oidc: { issuer: ISSUER, clientId: "panel", baseUrl: "https://ops.example/admin", secret: SECRET, fetch: idp.fetcher } } }, undefined);
+    const plain = await call(router, "GET", "/admin/auth/login");
+    expect(plain.headers["set-cookie"]).not.toMatch(/Secure/);
+    const behindTls = await call(router, "GET", "/admin/auth/login", { headers: { "x-forwarded-proto": "https" } });
+    expect(behindTls.headers["set-cookie"]).toMatch(/; Secure$/);
+    const authorize = new URL(behindTls.headers.location as string);
+    idp.setNonce(authorize.searchParams.get("nonce") as string);
+    const flow = (behindTls.headers["set-cookie"] as string).split(";")[0] as string;
+    const callback = await call(router, "GET", `/admin/auth/callback?code=good-code&state=${authorize.searchParams.get("state")}`, { headers: { cookie: flow, "x-forwarded-proto": "https" } });
+    expect(callback.headers["set-cookie"]).toMatch(/; Secure$/);
+  });
+
   it("answers an API call without a session with 401, not a redirect", async () => {
     const { router } = await signIn((nonce) => ({ iss: ISSUER, aud: "panel", exp: now() + 300, nonce }));
     expect((await call(router, "GET", "/admin/api/state")).status).toBe(401);

@@ -2,6 +2,7 @@
 import type { Api } from "./api.js";
 import type { Root } from "./dom.js";
 import type { Translate } from "./i18n.js";
+import type { Prefs } from "./prefs.js";
 
 export interface ViewDeps {
   root: Root;
@@ -20,4 +21,11 @@ export interface ViewDeps {
   scheme: "auto" | "light" | "dark";
   /** Only the groups: no header chrome, no activity, no shortcuts. */
   compact: boolean;
+  /** This viewer's pins, collapses, colours and language, kept in their browser. */
+  prefs: Prefs;
+  /** The language shown now, and the ones a viewer may switch to (none on a snapshot). */
+  language: string;
+  languages: readonly string[];
+  /** Switches this viewer's language and redraws. */
+  setLanguage?: ((code: string | undefined) => void) | undefined;
 }

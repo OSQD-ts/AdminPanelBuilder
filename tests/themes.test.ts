@@ -90,9 +90,13 @@ describe("the claims the theme files make", () => {
 });
 
 describe("the layout and the tokens", () => {
-  it("use no custom property a theme does not define", () => {
+  it("use no custom property that neither a theme nor the layout itself defines", () => {
     const defined = new Set([...themeStylesheet(materialTheme).matchAll(/(--apb-[a-z0-9-]+):/g)].map((match) => match[1]));
     defined.add("--apb-series");
+    // The layout's own measures (gutter, page width, control height) are derived from tokens, and a theme never sets them.
+    const own = [...LAYOUT_CSS.matchAll(/(--apb-[a-z0-9-]+):/g)].map((match) => match[1]);
+    for (const name of own) defined.add(name);
+    expect(own.filter((name) => themeStylesheet(materialTheme).includes(`${name}:`))).toEqual([]);
     const used = new Set([...LAYOUT_CSS.matchAll(/var\((--apb-[a-z0-9-]+)\)/g)].map((match) => match[1]));
     expect([...used].filter((name) => !defined.has(name))).toEqual([]);
   });

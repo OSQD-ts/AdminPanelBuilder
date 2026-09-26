@@ -2,9 +2,11 @@
  * The hot-path cases the bench measures, and the reference loop they are measured against.
  *
  * `value.set()` runs inside the application, as often as the application writes — a counter per
- * request, a gauge per message. Everything here is that path: the panel is never on it for a read.
+ * request, a gauge per message: the write path. The read path is what every open page costs the
+ * process each poll or stream frame: the schema, the state, and a stream tick shared by viewers.
  */
 import { createAdminPanel } from "../src/index.js";
+import { StreamHub } from "../src/server/stream.js";
 
 export const ITERATIONS = 200_000;
 
@@ -32,6 +34,39 @@ export interface Case {
   name: string;
   /** Prepared once; `run` is timed. */
   run(iterations: number): void;
+  /** Iterations for a case much heavier than a write; its ratio is per iteration. Default `ITERATIONS`. */
+  iterations?: number;
+}
+
+const EVERYTHING = { groups: undefined, edit: true, actions: true, restrictions: [] };
+
+/** A panel of 1,000 values across 10 groups, a tenth of them charted, as a large real panel is. */
+function largePanel() {
+  const panel = createAdminPanel();
+  const values = Array.from({ length: 1000 }, (_, index) => panel.viewable(index, { label: `Value ${index}`, group: `Group ${index % 10}`, chart: index % 10 === 0 }));
+  for (const [index, value] of values.entries()) value.value = index + 1;
+  return panel;
+}
+
+export function readCases(): Case[] {
+  const panel = largePanel();
+  const hub = new StreamHub(panel, { framesPerSecond: 4 }, "bench");
+  const state = panel.state(EVERYTHING);
+  return [
+    { name: "schema() over 1,000 values", iterations: 300, run: (n) => { for (let i = 0; i < n; i += 1) panel.schema(EVERYTHING); } },
+    { name: "state() over 1,000 values", iterations: 300, run: (n) => { for (let i = 0; i < n; i += 1) panel.state(EVERYTHING); } },
+    {
+      name: "a stream tick for 20 viewers",
+      iterations: 300,
+      run: (n) => {
+        for (let i = 0; i < n; i += 1) {
+          // 20 viewers at one position: the first computes the frame, the rest share it.
+          for (let viewer = 0; viewer < 20; viewer += 1) hub.frame({ ...EVERYTHING }, state.version, state.now, state.feedSeq);
+          (hub as unknown as { framesAt: number }).framesAt = 0;
+        }
+      },
+    },
+  ];
 }
 
 export function cases(): Case[] {

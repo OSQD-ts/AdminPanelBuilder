@@ -4,7 +4,7 @@
  * A failure surfaces the server's `{ error }` sentence, so what the operator reads is what the
  * server decided rather than a status code.
  */
-import type { ChangeRecord, JsonValue, Notice, PanelSchema, PanelState, PendingChange, SettingDiff, TableRowsAnswer, WireValue } from "../types.js";
+import type { ChangeRecord, JsonValue, Notice, PanelLayout, PanelSchema, PanelState, PendingChange, RepeatRuleShape, SettingDiff, TableRowsAnswer, WireValue } from "../types.js";
 
 export class ApiError extends Error {
   constructor(
@@ -51,16 +51,18 @@ export class Api {
     return this.get<{ notices: Notice[] }>("/api/notices").then((body) => body.notices);
   }
 
-  /** A changed value, or a proposal waiting for a second operator. With `at`, the change waits for that time. */
-  edit(id: string, value: unknown, revertAfterMs?: number, at?: number): Promise<{ value?: WireValue; pending?: PendingChange }> {
-    const body: Record<string, unknown> = { value };
-    if (revertAfterMs !== undefined) body.revertAfterMs = revertAfterMs;
-    if (at !== undefined) body.at = at;
-    return this.post<{ value?: WireValue; pending?: PendingChange }>(`/api/values/${encodeURIComponent(id)}`, body);
+  /** A changed value, or a proposal waiting for a second operator; `change` says for how long, when, by what rule and why. */
+  edit(id: string, value: unknown, change: ChangeFields = {}): Promise<{ value?: WireValue; pending?: PendingChange }> {
+    return this.post<{ value?: WireValue; pending?: PendingChange }>(`/api/values/${encodeURIComponent(id)}`, { value, ...fields(change) });
   }
 
   cancelScheduled(id: string): Promise<void> {
     return this.post(`/api/schedules/${encodeURIComponent(id)}/cancel`, {}).then(() => undefined);
+  }
+
+  /** The page's words in another shipped language. */
+  messages(locale: string): Promise<Record<string, string>> {
+    return this.get<{ messages: Record<string, string> }>(`/api/messages/${encodeURIComponent(locale)}`).then((body) => body.messages);
   }
 
   settings(): Promise<Record<string, JsonValue>> {
@@ -71,20 +73,27 @@ export class Api {
     return this.post("/api/settings/diff", { settings });
   }
 
-  importSettings(settings: unknown): Promise<number> {
-    return this.post<{ changed: number }>("/api/settings/apply", { settings }).then((body) => body.changed);
+  importSettings(settings: unknown, reason?: string): Promise<number> {
+    return this.post<{ changed: number }>("/api/settings/apply", { settings, ...fields({ reason }) }).then((body) => body.changed);
   }
 
-  run(id: string, input?: Record<string, JsonValue>): Promise<string> {
-    return this.post<{ result: { message: string } }>(`/api/actions/${encodeURIComponent(id)}`, input === undefined ? {} : { input }).then((body) => body.result.message);
+  /** Saves the layout every viewer gets; null goes back to the one in code. Answers the layout as this viewer now sees it. */
+  saveLayout(layout: PanelLayout | null): Promise<PanelLayout | null> {
+    return this.post<{ layout: PanelLayout | null }>("/api/layout", { layout }).then((body) => body.layout);
+  }
+
+  /** An action's answer, or undefined when it was proposed for a second operator to approve. */
+  run(id: string, input?: Record<string, JsonValue>, reason?: string): Promise<string | undefined> {
+    return this.post<{ result?: { message: string } }>(`/api/actions/${encodeURIComponent(id)}`, { ...(input === undefined ? {} : { input }), ...fields({ reason }) }).then((body) => body.result?.message);
   }
 
   runRow(table: string, action: string, row: string): Promise<string> {
     return this.post<{ result: { message: string } }>(`/api/tables/${encodeURIComponent(table)}/actions/${encodeURIComponent(action)}`, { row }).then((body) => body.result.message);
   }
 
-  applyProfile(id: string): Promise<void> {
-    return this.post(`/api/profiles/${encodeURIComponent(id)}`, {}).then(() => undefined);
+  /** Applied, or proposed (`pending`) when the profile needs approval. */
+  applyProfile(id: string, change: ChangeFields = {}): Promise<{ pending?: PendingChange }> {
+    return this.post<{ pending?: PendingChange }>(`/api/profiles/${encodeURIComponent(id)}`, fields(change));
   }
 
   decide(pending: string, verdict: "approve" | "reject"): Promise<void> {
@@ -108,7 +117,7 @@ export class Api {
     try {
       response = await fetch(`${this.base}${path}`, { ...init, credentials: "same-origin", cache: "no-store" });
     } catch {
-      throw new ApiError("The panel could not be reached.", 0);
+      throw new ApiError("The panel could not be reached.", 0, "unreachable");
     }
     let body: unknown;
     try {
@@ -124,6 +133,20 @@ export class Api {
     }
     return body as T;
   }
+}
+
+/** For how long, when, by what rule, and why: the fields any change may carry. */
+export interface ChangeFields {
+  revertAfterMs?: number | undefined;
+  at?: number | undefined;
+  repeat?: RepeatRuleShape | undefined;
+  reason?: string | undefined;
+}
+
+function fields(change: ChangeFields): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of ["revertAfterMs", "at", "repeat", "reason"] as const) if (change[key] !== undefined) out[key] = change[key];
+  return out;
 }
 
 /** Server sentences are lower-case so they read inside other sentences; on their own they start with a capital and end with a stop. */

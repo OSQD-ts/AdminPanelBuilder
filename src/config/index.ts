@@ -34,6 +34,7 @@ export interface ListenerConfig {
   view: { groups: string[] };
   stream: { enabled: boolean; maxViewers: number; framesPerSecond: number };
   metrics: { enabled: boolean; prefix: string };
+  health: { enabled: boolean };
   throttle: { enabled: boolean; failures: number; windowMs: number };
   writeLimit: { enabled: boolean; perMinute: number };
 }
@@ -46,6 +47,7 @@ export const DEFAULT_CONFIG: Readonly<ListenerConfig> = Object.freeze({
   view: { groups: [] },
   stream: { enabled: true, maxViewers: 16, framesPerSecond: 4 },
   metrics: { enabled: false, prefix: "admin_panel" },
+  health: { enabled: false },
   throttle: { enabled: true, failures: 10, windowMs: 60_000 },
   writeLimit: { enabled: true, perMinute: 60 },
 } satisfies ListenerConfig);
@@ -65,6 +67,7 @@ export function readConfig(table: ReturnType<typeof parseToml>, options: { final
     view: { groups: [] },
     stream: { ...d.stream },
     metrics: { ...d.metrics },
+    health: { ...d.health },
     throttle: { ...d.throttle },
     writeLimit: { ...d.writeLimit },
   };
@@ -84,6 +87,9 @@ export function readConfig(table: ReturnType<typeof parseToml>, options: { final
   const metrics = root.section("metrics");
   config.metrics = { enabled: metrics.boolean("enabled", d.metrics.enabled), prefix: metrics.string("prefix", d.metrics.prefix) };
   metrics.done();
+  const health = root.section("health");
+  config.health = { enabled: health.boolean("enabled", d.health.enabled) };
+  health.done();
   const throttle = root.section("throttle");
   config.throttle = { enabled: throttle.boolean("enabled", d.throttle.enabled), failures: throttle.integer("failures", d.throttle.failures, { min: 1 }), windowMs: throttle.integer("window_ms", d.throttle.windowMs, { min: 1000 }) };
   throttle.done();
@@ -173,6 +179,7 @@ export function listenOptions(config: ListenerConfig): ListenOptions {
     controls: { edit: config.controls.edit, actions: config.controls.actions },
     stream: config.stream.enabled ? { maxViewers: config.stream.maxViewers, framesPerSecond: config.stream.framesPerSecond } : false,
     metrics: config.metrics.enabled ? { prefix: config.metrics.prefix } : false,
+    health: config.health.enabled,
     authThrottle: config.throttle.enabled ? { failures: config.throttle.failures, windowMs: config.throttle.windowMs } : false,
     writeLimit: config.writeLimit.enabled ? { perMinute: config.writeLimit.perMinute } : false,
   };
@@ -217,6 +224,7 @@ export const RELOADABLE: readonly string[] = Object.freeze([
   "view.groups",
   "metrics.enabled",
   "metrics.prefix",
+  "health.enabled",
   "throttle.enabled",
   "throttle.failures",
   "throttle.window_ms",
@@ -250,6 +258,30 @@ export function planReload(current: ListenerConfig, next: ListenerConfig, by: st
     else plan.applied.push(key);
   }
   return plan;
+}
+
+/**
+ * Reloads a running listener from new configuration: plans it, logs each setting that needs a
+ * restart first, one line each, then applies the rest. Returns the configuration now in force.
+ *
+ *   process.on("SIGHUP", async () => { config = await reloadListener(server, config, await loadConfig(), "SIGHUP"); });
+ */
+export function reloadListener(server: { reload(options: ListenOptions, meta: { by: string }): { refused?: string | undefined } }, current: ListenerConfig, next: ListenerConfig, by: string, log: (line: string) => void = (line) => console.warn(line)): ListenerConfig {
+  const plan = planReload(current, next, by);
+  for (const { key, reason } of plan.requiresRestart) log(`admin panel: ${key} was not reloaded (${reason}); restart to apply it`);
+  if (plan.applied.length === 0) return current;
+  // What needs a restart stays as it runs now; everything else takes the new value.
+  const kept: ListenerConfig = structuredClone(next);
+  kept.listen.port = current.listen.port;
+  kept.listen.host = current.listen.host;
+  kept.listen.basePath = current.listen.basePath;
+  kept.stream = { ...current.stream };
+  const result = server.reload(listenOptions(kept), { by });
+  if (result.refused !== undefined) {
+    log(`admin panel: the reload by ${by} was refused, and the old settings stay: ${result.refused}`);
+    return current;
+  }
+  return kept;
 }
 
 /** A comparison that sees a pattern's source and flags rather than `{}`. */

@@ -187,3 +187,28 @@ describe("apb config", () => {
     expect(bad.err[0]).toMatch(/did you mean listen.port/);
   });
 });
+
+describe("apb, reasons and repeats", () => {
+  it("sends a reason, repeats by a rule in a zone, and refuses a rule it cannot read", async () => {
+    const { panel, server } = await listenPanelFor((panel) => {
+      panel.modifiable("normal", { label: "Mode", reason: "required" });
+      const flag = panel.modifiable(false, "Flag");
+      panel.profile("Night", [[flag, true]]);
+    });
+    try {
+      const refused = io();
+      expect(await main(["set", server.url, "mode", "quiet"], refused.io)).toBe(1);
+      expect(refused.err.at(-1)).toMatch(/needs a reason/);
+      const run = io();
+      expect(await main(["set", server.url, "mode", "quiet", "--repeat", "weekly mon 09:30", "--tz", "Europe/Warsaw", "--reason", "weekly review"], run.io)).toBe(0);
+      expect(panel.state().values[0]?.scheduled?.[0]).toMatchObject({ repeat: { every: "week", weekday: 1, at: "09:30", timeZone: "Europe/Warsaw" }, reason: "weekly review" });
+      expect(await main(["apply", server.url, "night", "--for", "1h", "--reason", "test"], run.io)).toBe(0);
+      expect(panel.changes().at(-1)).toMatchObject({ kind: "profile", reason: "test" });
+      expect(await main(["set", server.url, "mode", "x", "--repeat", "hourly"], io().io)).toBe(2);
+      expect(await main(["set", server.url, "mode", "x", "--repeat", "daily 02:00", "--at", "2026-12-01T00:00:00Z"], io().io)).toBe(2);
+    } finally {
+      panel.close();
+      await server.close();
+    }
+  });
+});

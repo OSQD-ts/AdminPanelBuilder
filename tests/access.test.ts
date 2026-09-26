@@ -23,7 +23,7 @@ describe("per-group controls", () => {
     const schema = (await call(router, "GET", "/api/schema", { headers: bearer })).json.schema;
     const writable = schema.groups.flatMap((group: { items: Array<{ id: string; writable?: boolean }> }) => group.items.map((item) => [item.id, item.writable]));
     expect(writable).toEqual(expect.arrayContaining([["gap", true], ["rate", false]]));
-    expect(schema.restrictions).toContain('Editing is allowed here only in "Matchmaking".');
+    expect(schema.restrictions).toContainEqual({ text: 'Editing is allowed here only in "Matchmaking".', key: "restrictionEditGroups", params: { groups: '"Matchmaking"' } });
   });
 
   it("refuse an empty list rather than grant nothing while looking configured", () => {
@@ -37,7 +37,9 @@ describe("two-person approval", () => {
     const { panel } = panelAt();
     const limit = panel.modifiable(10, { label: "Limit", approval: true, max: 100 });
     const router = routerFor(panel, { auth: { tokens: { ada: TOKEN, sam: "another-long-token-12" } }, controls: { edit: true } });
-    const proposed = await call(router, "POST", "/api/values/limit", { headers: jsonWrite, body: '{"value":50}' });
+    const unexplained = await call(router, "POST", "/api/values/limit", { headers: jsonWrite, body: '{"value":50}' });
+    expect(unexplained.json).toMatchObject({ key: "refuseReasonRequired" });
+    const proposed = await call(router, "POST", "/api/values/limit", { headers: jsonWrite, body: '{"value":50,"reason":"tournament traffic"}' });
     expect(proposed.status).toBe(202);
     expect(limit.value).toBe(10);
     const id = proposed.json.pending.id;
@@ -48,24 +50,24 @@ describe("two-person approval", () => {
     const other = await call(router, "POST", `/api/pending/${id}/approve`, { headers: { authorization: "Bearer another-long-token-12", "content-type": "application/json" }, body: "{}" });
     expect(other.status).toBe(200);
     expect(limit.value).toBe(50);
-    expect(panel.changes().at(-1)).toMatchObject({ kind: "approval", by: "ada, approved by sam", to: 50 });
+    expect(panel.changes().at(-1)).toMatchObject({ kind: "approval", by: "ada, approved by sam", to: 50, reason: "tournament traffic" });
   });
 
   it("checks a proposal when it is made, and lets it lapse after an hour", () => {
     const { panel, clock } = panelAt();
     panel.modifiable(10, { label: "Limit", approval: true, max: 100 });
-    expect(panel.edit("limit", 500, "ada", all)).toMatchObject({ ok: false, reason: "invalid" });
-    expect(panel.edit("limit", 50, "ada", all)).toMatchObject({ ok: true });
+    expect(panel.edit("limit", 500, "ada", all, { reason: "why not" })).toMatchObject({ ok: false, reason: "invalid" });
+    expect(panel.edit("limit", 50, "ada", all, { reason: "load" })).toMatchObject({ ok: true });
     clock.advance(3_600_000);
     expect(panel.pending()).toEqual([]);
   });
 
-  it("can be turned down", () => {
+  it("can be turned down", async () => {
     const { panel } = panelAt();
     panel.modifiable(10, { label: "Limit", approval: true });
-    const outcome = panel.edit("limit", 20, "ada", all);
+    const outcome = panel.edit("limit", 20, "ada", all, { reason: "load" });
     const id = "pending" in outcome && outcome.ok ? outcome.pending.id : "";
-    expect(panel.reject(id, "sam", all).ok).toBe(true);
+    expect((await panel.reject(id, "sam", all)).ok).toBe(true);
     expect(panel.pending()).toEqual([]);
     expect(panel.get("limit")?.value).toBe(10);
   });
@@ -300,6 +302,28 @@ describe("the change log and sinks when things fail", () => {
     panel.edit("a", 2, "ada", all);
     await vi.waitFor(() => expect([hook.failed, notifier.failed]).toEqual([1, 1]));
     expect(hook.retried).toBe(3);
+  });
+
+  it("gives up on a webhook that never answers, and cancels the request it left open", async () => {
+    const { panel } = panelAt();
+    panel.modifiable(1, "a");
+    const signals: AbortSignal[] = [];
+    const sink = webhookSink({
+      url: "https://audit.example",
+      timeoutMs: 20,
+      retries: 0,
+      sleep: async () => undefined,
+      // An endpoint that takes the connection and then says nothing.
+      fetch: (async (_url: string, init: RequestInit) => {
+        signals.push(init.signal as AbortSignal);
+        return await new Promise<Response>(() => undefined);
+      }) as typeof fetch,
+    });
+    panel.on("change", sink);
+    panel.edit("a", 2, "ada", all);
+    await vi.waitFor(() => expect(sink.failed).toBe(1));
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
   });
 
   it("retries a webhook that is down until it answers, and never one that refuses the record", async () => {

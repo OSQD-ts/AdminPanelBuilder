@@ -16,7 +16,9 @@ A TypeScript library that turns values declared in an application (`viewable`, `
 npm run check            # typecheck + lint + tests + docs:check, in that order
 npm run typecheck        # tsc over src, tests, examples, scripts, demo; and the browser project
 npm test                 # vitest run (the browser suite is excluded)
-npm run test:browser     # the page in a real browser; BROWSER_ENGINE picks chromium/firefox/webkit
+npm run test:browser     # the page in a real browser; BROWSER_ENGINE picks chromium/firefox/webkit;
+                         # on chromium it also compares screenshots (tests/browser/screenshots/)
+npm run test:visual:update  # accept the page's current look; look at the images before committing
 npm run lint             # biome check .   (npm run format applies fixes)
 npm run docs:check       # every local markdown link and anchor resolves
 npm run build            # tsup + declarations
@@ -24,7 +26,7 @@ npm run check:package    # pack, install into an empty project, load every entry
 npm run demo             # :9780 and :9781, see demo/server.ts
 npm run simulate         # pokes the running demo through its API
 npm run playground       # every theme, light and dark, on :9786
-npm run bench:guard      # write-path budgets, ratios against a reference loop
+npm run bench:guard      # write-path and read-path budgets, ratios against a reference loop
 npm run shared:check     # the helpers shared with hackerpot/bothandlerjs still match
 npm run apb -- <command> # the CLI from source
 ```
@@ -35,10 +37,13 @@ test and typecheck: `src/client.generated.ts` is generated from `src/client/` an
 ## Layout
 
 - `src/core.ts` — the panel: registry, schema, state, edits, imports; it coordinates `src/panel/`
-  (charts, approvals, the schedule of timed and scheduled changes, profiles, alerts, scopes and grants,
-  sync between replicas).
+  (charts, approvals of values, actions and profiles, the schedule of timed, scheduled and repeating
+  changes with `recurrence.ts`, profiles, alerts, scopes and grants, settings, wire shapes, and
+  `replication.ts` for what travels between replicas).
+- `src/i18n/` — the page's words in every language; every server refusal is a `refuse*` key there,
+  made into its English sentence by `refuse.ts`. A new refusal needs a key, or tests/i18n.test.ts fails.
 - `src/blocks/` — tables, feeds, counters. `src/presets/` — bothandlerjs and hackerpot sections.
-- `src/change-log.ts` (hash-chained), `src/audit.ts`, `src/metrics.ts`, `src/cli.ts` (written on
+- `src/change-log.ts` (hash-chained, rotating), `src/audit.ts`, `src/metrics.ts`, `src/cli.ts` (written on
   `src/sdk.ts`, the typed client), `src/testing.ts`, `src/config/` (TOML layer; `admin-panel.toml` is
   every default and a test holds it there).
 - `src/values/` — the handle, kinds and constraints, the history ring.
@@ -50,7 +55,9 @@ test and typecheck: `src/client.generated.ts` is generated from `src/client/` an
   if chart or table code leaks into the main bundle. `src/element/` — `<admin-panel>`.
 - `src/stores/` — persistence (file, memory, Redis). `src/internal/` — helpers; `clock.ts`, `emitter.ts` and `async.ts` are
   byte-identical copies from hackerpot and bothandlerjs and must stay so.
-- `examples/` — one panel per consumer project, run as processes by `tests/examples.test.ts`.
+- `examples/` — seven generic panels, each going deep into one part of the engine (quickstart,
+  service, change-control, access, fleet, embedding, configuration), described in `docs/examples.md` and
+  run as processes by `tests/examples.test.ts`.
 - `docs/` — the documentation; README.md is the argument and the index.
 
 ## Commit and attribution rules

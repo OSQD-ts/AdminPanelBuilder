@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -68,6 +68,16 @@ describe("the file store", () => {
     await Promise.all([store.save("a", 1), store.save("b", "two"), store.save("a", 3)]);
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ a: 3, b: "two" });
     expect(await fileStore(path).load()).toEqual({ a: 3, b: "two" });
+  });
+
+  it("leaves no temporary file behind when a write fails", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "apb-"));
+    const path = join(directory, "panel.json");
+    // A value that cannot be turned into JSON fails the write inside the queue.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    await expect(fileStore(path).save("a", circular as never)).rejects.toThrow();
+    expect((await readdir(directory)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
   it("refuses a file that is not an object of stored values", async () => {

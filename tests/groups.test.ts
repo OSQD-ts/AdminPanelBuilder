@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { createAdminPanel } from "../src/index.js";
+import { EVERYTHING } from "../src/testing.js";
 import { panelAt } from "./helpers.js";
 
 const titles = (panel: ReturnType<typeof panelAt>["panel"]) => panel.schema().groups.map((group) => group.title);
@@ -64,6 +66,26 @@ describe("grouping values", () => {
     expect(itemsOf(panel, "Matchmaking")).toEqual(["queue", "gap", "clear"]);
   });
 
+  it("declares every kind of card from the handle, counters, charts and profiles included", () => {
+    const panel = createAdminPanel();
+    const games = panel.group("Games");
+    const config = { limit: 5 };
+    const started = games.counter("Games started");
+    const latency = games.percentiles("Move time", { unit: "ms" });
+    const rate = games.rate("Moves per second", () => 3);
+    const limit = games.bind(config, "limit", { label: "Limit", editable: true });
+    games.chart({ title: "Load", series: [rate] });
+    const elsewhere = panel.modifiable(false, { label: "Guests", group: "Settings" });
+    games.profile("Tournament", [[elsewhere, true]]);
+    started.inc();
+    latency.record(10);
+    const ids = panel.schema(EVERYTHING).groups.find((group) => group.id === "games")?.items.map((item) => `${item.type}:${item.id}`) ?? [];
+    expect(ids).toEqual(expect.arrayContaining(["value:games-started", "value:moves-per-second", "value:limit", "chart:games-load-chart", "value:move-time-p95", "profile:tournament"]));
+    expect([limit.group, rate.group]).toEqual(["Games", "Games"]);
+    expect(panel.schema(EVERYTHING).groups.find((group) => group.id === "settings")?.items.map((item) => item.id)).toEqual(["guests"]);
+    panel.close();
+  });
+
   it("refuses a value from another panel instead of adopting it", () => {
     const one = panelAt().panel;
     const two = panelAt().panel;
@@ -77,7 +99,8 @@ describe("grouping values", () => {
     panel.configure({ title: "Renamed", theme: "apple", colorScheme: "dark" });
     const schema = panel.schema();
     expect(schema.title).toBe("Renamed");
-    expect(schema.theme).toEqual({ name: "apple", scheme: "dark" });
+    expect(schema.theme).toMatchObject({ name: "apple", scheme: "dark" });
+    expect(schema.theme.offered?.[0]).toEqual({ name: "apple", label: "Apple" });
     expect(() => panel.configure({ title: "Half", pollIntervalMs: 10 })).toThrow(/pollIntervalMs is 10/);
     expect(panel.schema().title).toBe("Renamed");
     expect(() => panel.configure({ theme: "materiel" })).toThrow(/no built-in theme called "materiel"/);

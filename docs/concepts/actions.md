@@ -49,7 +49,14 @@ is recorded with the run.
 - **Never rejects into the request.** A throw or a rejection becomes a sentence for the operator and a
   report on the panel's error channel.
 - **Confirmed when asked.** `confirm: true` asks for a second click; `destructive: true` implies it and
-  draws the button as destructive.
+  draws the button as destructive. `confirm: "type"` asks for the action's label to be typed before the
+  button works, for what cannot be taken back. It is a page safeguard; a script calling the API is not
+  asked.
+- **Two people when it matters.** `approval: true` makes a run a proposal: the input and the reason are
+  kept, a second operator approves, and the action runs then, with that input, attributed to both. The
+  proposer cannot approve their own.
+- **With a reason.** `reason: "required"` refuses a run that does not say why; otherwise the page offers
+  an optional one. The function receives it as `reason`, and it is kept on the change record.
 
 ## Related
 

@@ -36,10 +36,17 @@ own, remembered in their browser like pinned cards.
 ## Languages
 
 `createAdminPanel({ locale: "pl" })` — English (`en`), Polish (`pl`) and German (`de`) ship, and
-`messages` replaces any of the page's words. A value's constraint refusals come from the server with a
+`messages` replaces any of the page's words. `locale: "auto"` follows each viewer's browser, and
+**Language** in the header lets a viewer choose for themselves, remembered like their colours. Every
+word the page writes is in the chosen language — times ("vor 5 Minuten"), durations, numbers and On/Off
+through `Intl` — and the page carries only English in its script: another language arrives with the
+schema, or from `/api/messages/<code>` when a viewer switches. A value's constraint refusals come from the server with a
 key and parameters, so the page says "Grenze darf höchstens 10 sein" rather than the English sentence;
-other refusals are named by kind in the page's language with the server's sentence after them. Labels,
-descriptions and values are yours and are never translated.
+other refusals are named by kind in the page's language with the server's sentence after them. The
+panel's own notices and the frame around a reading that failed travel the same way, so they are said
+in the viewer's language too. Labels, descriptions and values are yours and are never translated, and
+neither is a sentence the panel did not write itself: an alert reads the same on the page, in the
+change log and in a webhook.
 
 To add a language, copy `ENGLISH` from `src/i18n/messages.ts`, translate every value, and add it to
 `LOCALES`; the type makes a missing key an error, and a test checks every placeholder survives.

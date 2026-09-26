@@ -21,6 +21,10 @@ export interface AdminPanelProps {
   /** Where `panel.handler()` is mounted. */
   src: string;
   scheme?: "light" | "dark" | undefined;
+  /** One group only, by title or id. */
+  group?: string | undefined;
+  /** Only the cards: no heading, tabs or Activity. */
+  compact?: boolean | undefined;
   className?: string | undefined;
 }
 
@@ -32,6 +36,9 @@ export function createAdminPanelComponent(React: ReactLike): (props: AdminPanelP
     }, []);
     const attributes: Record<string, unknown> = { src: props.src };
     if (props.scheme !== undefined) attributes.scheme = props.scheme;
+    if (props.group !== undefined) attributes.group = props.group;
+    // A boolean attribute is present or absent; React would write compact="false", which still counts.
+    if (props.compact === true) attributes.compact = "";
     if (props.className !== undefined) attributes.class = props.className;
     return React.createElement("admin-panel", attributes);
   };

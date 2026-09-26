@@ -7,15 +7,16 @@
  */
 import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import type { AdminPanel } from "../src/index.js";
+import type { AdminPanel, ListenOptions } from "../src/index.js";
 
 export function isMain(url: string): boolean {
   return process.argv[1] !== undefined && url === pathToFileURL(process.argv[1]).href;
 }
 
-export async function runExample(panel: AdminPanel, tick: () => void, port = Number(process.env.PORT ?? 9780)): Promise<void> {
+/** `serve` replaces the listener's options, for an example that shows another kind of sign-in; `token` is passed in. */
+export async function runExample(panel: AdminPanel, tick: () => void, port = Number(process.env.PORT ?? 9780), serve?: (token: string) => ListenOptions): Promise<void> {
   const token = process.env.PANEL_TOKEN ?? randomBytes(18).toString("base64url");
-  const server = await panel.listen({ port, auth: { token, name: "operator" }, controls: { edit: true, actions: true } });
+  const server = await panel.listen({ port, ...(serve === undefined ? { auth: { token, name: "operator" }, controls: { edit: true, actions: true } } : serve(token)) });
   const timer = setInterval(tick, 500);
   // stdout carries the one line a script might want; the explanation goes to stderr.
   console.log(`${server.url}?token=${token}`);

@@ -34,7 +34,8 @@ app.use("/workers/mailer", remotePanelHandler({
   other token the header is ignored.
 - **Some groups only.** `groups: ["Mail"]` filters the worker's schema, state, stream, changes and
   settings here, before anything reaches a browser, and refuses a write to anything outside those groups
-  without forwarding it.
+  without forwarding it. What each operator may see is cached by the upstream's structure number, so a
+  poll costs one upstream request.
 - **Live.** The worker's stream is forwarded frame by frame, filtered the same way, and resumes where it
   was after a reconnect. `stream: false` makes the page poll instead.
 - **One remote panel shows one process.** Nothing is aggregated across replicas, and the header names the

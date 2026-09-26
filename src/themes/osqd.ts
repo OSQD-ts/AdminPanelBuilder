@@ -31,6 +31,7 @@ export const osqdTheme: Theme = {
     headerInk: "#0b0d12",
     grid: "#eceef1",
     shadow: "0 1px 2px rgba(11,13,18,.06), 0 1px 8px rgba(11,13,18,.04)",
+    shadowRaised: "0 1px 3px rgba(11,13,18,.06), 0 6px 18px rgba(11,13,18,.08)",
     chart: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"],
   },
   dark: {
@@ -54,6 +55,7 @@ export const osqdTheme: Theme = {
     headerInk: "#f2f4f7",
     grid: "#23272e",
     shadow: "none",
+    shadowRaised: "0 1px 3px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.45)",
     chart: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"],
   },
   shape: {

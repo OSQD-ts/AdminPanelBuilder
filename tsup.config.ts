@@ -28,8 +28,15 @@ const shared = {
 // sequentially, so the first cleans dist/ before the second writes. If that ever ran
 // concurrently the clean could wipe the element bundle, intermittently shipping a package
 // whose `./element` export points at nothing. Keep clean on exactly the first config.
+const entries = ["src/index.ts", "src/adapters/index.ts", "src/themes/index.ts", "src/presets/index.ts", "src/cli.ts", "src/sdk.ts", "src/testing.ts", "src/config/index.ts"];
+
+// ESM is split: every entry imports the core from shared chunks instead of carrying its own copy,
+// which is most of what the package weighs (each entry bundled the whole panel, and the page's
+// client with it, once per entry and once more per source map). CJS stays unsplit — tsup's CJS
+// splitting is experimental — so a `require` loads one self-contained file per entry.
 export default defineConfig([
-  { entry: ["src/index.ts", "src/adapters/index.ts", "src/themes/index.ts", "src/presets/index.ts", "src/cli.ts", "src/sdk.ts", "src/testing.ts", "src/config/index.ts"], clean: true, ...shared },
+  { entry: entries, clean: true, ...shared, format: ["esm"], splitting: true },
+  { entry: entries, clean: false, ...shared, format: ["cjs"], sourcemap: false },
   // Browser code, so ESM only and type-checked against the DOM. Kept off the root entry, which
   // must never pull in anything that needs a document.
   { entry: { element: "src/element/index.ts", react: "src/react.ts", vue: "src/vue.ts" }, format: ["esm"], platform: "browser", target: "es2020", dts: false, sourcemap: true, splitting: false, clean: false },

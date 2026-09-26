@@ -24,6 +24,13 @@ describe("the React wrapper", () => {
     Component({ src: "/admin", scheme: "dark", className: "wide" });
     expect(created).toEqual([{ type: "admin-panel", props: { src: "/admin", scheme: "dark", class: "wide" } }]);
     expect(() => effects[0]?.()).not.toThrow();
+    created.length = 0;
+    Component({ src: "/admin", group: "Games", compact: true });
+    Component({ src: "/admin", compact: false });
+    expect(created).toEqual([
+      { type: "admin-panel", props: { src: "/admin", group: "Games", compact: "" } },
+      { type: "admin-panel", props: { src: "/admin" } },
+    ]);
   });
 });
 
@@ -33,5 +40,7 @@ describe("the Vue wrapper", () => {
     vue.createAdminPanelVueComponent({ defineComponent: (given) => (options = given), h: (type, props) => ({ type, props }), onMounted: () => undefined });
     const render = (options.setup as (props: { src: string }) => () => unknown)({ src: "/admin" });
     expect(render()).toEqual({ type: "admin-panel", props: { src: "/admin" } });
+    const compact = (options.setup as (props: Record<string, unknown>) => () => unknown)({ src: "/admin", group: "Games", compact: true, scheme: "dark" });
+    expect(compact()).toEqual({ type: "admin-panel", props: { src: "/admin", scheme: "dark", group: "Games", compact: "" } });
   });
 });

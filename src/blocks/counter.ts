@@ -14,7 +14,7 @@
 import type { AdminPanel } from "../core.js";
 import { AdminPanelConfigError } from "../errors.js";
 import { rejectUnknown } from "../internal/options.js";
-import type { ChartKind, Span, ValueFormat } from "../types.js";
+import type { CardSize, ChartKind, Span, ValueFormat } from "../types.js";
 import type { PanelValue } from "../values/handle.js";
 
 export interface CounterOptions {
@@ -23,6 +23,7 @@ export interface CounterOptions {
   group?: string | undefined;
   order?: number | undefined;
   span?: Span | undefined;
+  size?: CardSize | undefined;
   /** The rate's unit of time. Default `"second"`. */
   per?: "second" | "minute" | undefined;
   /** How far back the rate looks. Default 10 seconds, 2 seconds to an hour. */
@@ -40,13 +41,13 @@ export interface Counter {
   reset(): void;
 }
 
-const COUNTER_KEYS = ["id", "description", "group", "order", "span", "per", "windowMs", "chart"];
+const COUNTER_KEYS = ["id", "description", "group", "order", "span", "size", "per", "windowMs", "chart"];
 
 export function declareCounter(panel: AdminPanel, label: string, options: CounterOptions = {}): Counter {
   rejectUnknown(options, COUNTER_KEYS, `counter("${label}")`);
   const windowMs = checkWindow(label, options.windowMs);
   const per = options.per ?? "second";
-  const common = { group: options.group, order: options.order, span: options.span };
+  const common = { group: options.group, order: options.order, span: options.span, size: options.size };
   const total = panel.viewable(0, { ...common, id: options.id, label, format: "integer", description: options.description });
   panel.markCounter(total.id);
   const rate = rateOf(panel, `${label} per ${per}`, () => total.value, { ...common, per, windowMs, chart: options.chart ?? true, id: options.id === undefined ? undefined : `${options.id}-rate` });
@@ -69,6 +70,7 @@ export interface RateOptions {
   group?: string | undefined;
   order?: number | undefined;
   span?: Span | undefined;
+  size?: CardSize | undefined;
   per?: "second" | "minute" | undefined;
   windowMs?: number | undefined;
   chart?: boolean | ChartKind | undefined;
@@ -77,7 +79,7 @@ export interface RateOptions {
 
 /** The rate of a total the application already keeps: `rate("Requests per second", () => server.handled)`. */
 export function rateOf(panel: AdminPanel, label: string, read: () => number, options: RateOptions = {}): PanelValue<number> {
-  rejectUnknown(options, ["id", "description", "group", "order", "span", "per", "windowMs", "chart", "unit"], `rate("${label}")`);
+  rejectUnknown(options, ["id", "description", "group", "order", "span", "size", "per", "windowMs", "chart", "unit"], `rate("${label}")`);
   const windowMs = checkWindow(label, options.windowMs);
   const scale = options.per === "minute" ? 60_000 : 1000;
   const size = Math.ceil(windowMs / 1000) + 1;
@@ -93,6 +95,7 @@ export function rateOf(panel: AdminPanel, label: string, read: () => number, opt
     group: options.group,
     order: options.order,
     span: options.span,
+    size: options.size,
     decimals: 2,
     unit: options.unit ?? `/${options.per === "minute" ? "min" : "s"}`,
     chart: options.chart === false ? undefined : options.chart === true || options.chart === undefined ? true : options.chart,

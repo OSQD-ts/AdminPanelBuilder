@@ -15,4 +15,4 @@ export { remotePanelHandler } from "./remote.js";
 export type { RemotePanelOptions } from "./remote.js";
 export { renderMetrics } from "../metrics.js";
 export { createFleet, fleetHandler, MAX_FLEET_PANELS } from "./fleet.js";
-export type { Fleet, FleetEntry, FleetOptions, FleetPanel } from "./fleet.js";
+export type { Fleet, FleetDrift, FleetEntry, FleetOptions, FleetPanel } from "./fleet.js";

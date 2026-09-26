@@ -15,7 +15,8 @@ const app = express();
 
 // Your existing admin sign-in, after checking the password:
 app.post("/login", async (request, response) => {
-  response.cookie("apb_session", await signSession(secret, request.user.name), { httpOnly: true, sameSite: "lax", path: "/" });
+  // `secure` over TLS: a credential a browser would also send over plain HTTP is a credential given away.
+  response.cookie("apb_session", await signSession(secret, request.user.name), { httpOnly: true, secure: request.secure, sameSite: "lax", path: "/" });
   response.redirect("/admin/");
 });
 

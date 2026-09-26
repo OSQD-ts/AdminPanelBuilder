@@ -19,15 +19,20 @@
  * `<prefix>-tab-<id>` wired to `<prefix>-pane-<id>` with `aria-controls`, and the prefix is unique
  * per mounted panel so two panels on one page never share an id.
  */
-import type { ItemSchema, Status, ValueSchema } from "../types.js";
+import type { ChartSchema, GridShape, GroupLayout, ItemSchema, PanelSchema, Status, ValueSchema } from "../types.js";
+import { type Sizing, sizingOf } from "../panel/layout.js";
 import { buildActivity } from "./activity.js";
 import { type Announcer, createAnnouncer } from "./announce.js";
-import { buildFeed, buildProfile } from "./blocks.js";
-import { actionCard, type Card, type CardHost, frame, spanClass, valueCard } from "./cards.js";
-import { clear, el, uid } from "./dom.js";
+import { buildFeed } from "./blocks.js";
+import { actionCard, type Card, type CardHost, frame, profileCard, valueCard } from "./cards.js";
+import { clear, el, flash, uid } from "./dom.js";
+import { said } from "./explain.js";
 import type { Translate } from "./i18n.js";
 import { type Destination, installShortcuts, type Shortcuts } from "./palette.js";
-import { loadPrefs, type Prefs } from "./prefs.js";
+import { GridView, type Placed } from "./grid.js";
+import type { Prefs } from "./prefs.js";
+import { buildSettings } from "./settings.js";
+import { type Arranging, startArranging } from "./arrange.js";
 import { extras } from "./registry.js";
 import { type Store, serverTime } from "./store.js";
 import type { ViewDeps } from "./view-deps.js";
@@ -50,8 +55,19 @@ export class View implements CardHost {
   private readonly tabs: TabEntry[] = [];
   private active = "";
   private status!: HTMLElement;
+  /** The status sentence again, above the cards, while what they show may be out of date. */
+  private stale: HTMLElement | undefined;
   private search!: HTMLInputElement;
   private tablist!: HTMLElement;
+  private nav!: HTMLElement;
+  private arranging: Arranging | undefined;
+  private arrange: HTMLButtonElement | undefined;
+  /** A structure that arrived while arranging, drawn once it ends. */
+  private held: Store | undefined;
+  /** Each group's grid, by group id, for arranging cards on the page. */
+  readonly grids = new Map<string, GridView>();
+  /** Where the page was scrolled when each tab was left, so going back returns there. */
+  private readonly scrolled = new Map<string, number>();
   private main!: HTMLElement;
   private activity: { show(): void } | undefined;
   private announcer: Announcer;
@@ -65,7 +81,7 @@ export class View implements CardHost {
     readonly deps: ViewDeps,
     private current: Store,
   ) {
-    this.prefs = loadPrefs(`apb:${current.schema.title}:${current.schema.instance ?? ""}`);
+    this.prefs = deps.prefs;
     this.announcer = createAnnouncer(deps.t);
   }
 
@@ -81,8 +97,17 @@ export class View implements CardHost {
     this.rebuildPinned();
   }
 
+  foldedCard(): void {
+    for (const view of this.grids.values()) view.fitAgain();
+  }
+
   /** Draws everything from the store's schema. Called again only when the schema's structure changes. */
   build(store: Store): void {
+    // While cards are being arranged the page holds still: a new structure waits for arranging to end.
+    if (this.arranging !== undefined) {
+      this.held = store;
+      return;
+    }
     this.current = store;
     const { container } = this.deps;
     const previous = this.active;
@@ -97,7 +122,8 @@ export class View implements CardHost {
         if (item.type === "value") this.values.set(item.id, item);
       }
     }
-    this.applyScheme();
+    this.applyPrefs();
+    this.grids.clear();
     if (this.deps.compact) return this.buildCompact(store);
     const t = this.t;
 
@@ -113,7 +139,8 @@ export class View implements CardHost {
     if (schema.instance !== undefined) header.append(el("span", "apb-instance", schema.instance));
     this.status = el("span", "apb-status");
     this.status.setAttribute("role", "status");
-    header.append(this.status, this.schemeSwitch());
+    const settings = buildSettings(this);
+    header.append(this.status, this.arrangeButton(), settings.button);
     container.append(header);
 
     this.main = el("main", "apb-main");
@@ -123,7 +150,7 @@ export class View implements CardHost {
     this.main.setAttribute("aria-label", schema.title);
     if (schema.restrictions.length > 0) {
       const notes = el("div", "apb-notes");
-      for (const text of schema.restrictions) notes.append(el("p", "apb-note", text));
+      for (const restriction of schema.restrictions) notes.append(el("p", "apb-note", said(this.t, restriction.key, restriction.params, restriction.text)));
       this.main.append(notes);
     }
     const tools = el("div", "apb-toolbar");
@@ -139,23 +166,38 @@ export class View implements CardHost {
     });
     this.search = search;
     tools.append(search);
+    if (this.deps.standalone) {
+      // The key that reaches the box, shown in it; the stylesheet hides it while the box is in use.
+      const key = el("kbd", "apb-search-key", "/");
+      key.setAttribute("aria-hidden", "true");
+      tools.append(key);
+    }
     this.tablist = el("div", "apb-tabs");
     this.tablist.setAttribute("role", "tablist");
     this.tablist.setAttribute("aria-label", t("groups"));
-    this.main.append(tools, this.tablist);
+    // One band, so the tabs and the search stay in reach together while the cards scroll under them.
+    const nav = el("div", "apb-nav");
+    nav.append(tools, this.tablist);
+    this.nav = nav;
+    // Not a live region: the status in the header already is one, and says the same.
+    this.stale = el("p", "apb-stale");
+    this.stale.hidden = true;
+    // A line just above the band: once it scrolls out of sight, the band is floating and says so.
+    const sentinel = el("div", "apb-nav-sentinel");
+    sentinel.setAttribute("aria-hidden", "true");
+    this.main.append(this.stale, sentinel, nav);
+    if (typeof IntersectionObserver === "function") {
+      new IntersectionObserver(([entry]) => nav.toggleAttribute("data-stuck", entry !== undefined && !entry.isIntersecting && entry.boundingClientRect.top < 0)).observe(sentinel);
+    }
+    this.tablist.addEventListener("scroll", () => this.markEdges(), { passive: true });
+    if (typeof ResizeObserver === "function") new ResizeObserver(() => this.markEdges()).observe(this.tablist);
 
     if (!this.deps.snapshot) this.addTab(this.buildPinned());
     for (const group of schema.groups) {
       const { tab, pane } = this.tabPair(group.id, group.title, group.items.filter((item) => !(item.type === "chart" && item.placement === "alone")).length);
       if (group.description !== undefined) pane.append(el("p", "apb-pane-description", group.description));
       const grid = el("div", group.layout === "list" ? "apb-grid apb-grid-list" : "apb-grid");
-      const cards: Card[] = [];
-      for (const item of group.items) {
-        if (item.type === "chart" && item.placement === "alone") continue;
-        const card = this.buildCard(item);
-        cards.push(card);
-        grid.append(card.element);
-      }
+      const cards = this.fillGrid(grid, group.items, this.shapeOf(group.id), group.layout === "list", [this.prefs.layout?.[group.id], schema.layout?.[group.id]], group.id);
       pane.append(grid);
       this.addTab({ id: group.id, tab, pane, cards });
     }
@@ -164,7 +206,8 @@ export class View implements CardHost {
     if (schema.groups.length === 0) this.main.append(el("p", "apb-empty", t("noValues")));
     this.tablist.addEventListener("keydown", (event) => this.onTabKey(event));
     this.main.append(this.announcer.element);
-    container.append(this.main);
+    container.append(this.main, settings.element);
+    this.measureGrids(this.main);
     this.syncPinnedTab();
     this.installShortcuts();
 
@@ -176,6 +219,8 @@ export class View implements CardHost {
 
   /** Brings every card up to the store; redraws expensive ones only on the visible tab. */
   update(): void {
+    // Paused while arranging: a value that changes changes its card's height, and the cards would move under the pointer.
+    if (this.arranging !== undefined) return;
     const store = this.current;
     const now = serverTime(store);
     const statuses = new Map<string, Status | undefined>();
@@ -191,12 +236,22 @@ export class View implements CardHost {
     }
     this.announcer.observe(statuses, (id) => this.values.get(id)?.label ?? id);
     if (this.active === ACTIVITY) this.activity?.show();
+    // What arrived may be taller than the card it arrived on — a reason field, a longer reading:
+    // a grid whose cards no longer hold what they were given is fitted again. A hidden tab has no
+    // width and is left until it is shown.
+    for (const view of this.grids.values()) view.check();
   }
 
   setStatus(text: string, state: "live" | "trouble" | "snapshot" | "signed-out"): void {
     if (this.status === undefined) return;
     this.status.textContent = text;
     this.status.dataset.state = state;
+    this.deps.container.dataset.connection = state;
+    const stale = state === "trouble" || state === "signed-out";
+    if (this.stale !== undefined) {
+      this.stale.hidden = !stale;
+      this.stale.textContent = stale ? text : "";
+    }
   }
 
   destroy(): void {
@@ -223,12 +278,7 @@ export class View implements CardHost {
       const section = el("section", "apb-compact-group");
       if (store.schema.groups.length > 1) section.append(el("h2", "apb-label", group.title));
       const grid = el("div", group.layout === "list" ? "apb-grid apb-grid-list" : "apb-grid");
-      for (const item of group.items) {
-        if (item.type === "chart" && item.placement === "alone") continue;
-        const card = this.buildCard(item);
-        cards.push(card);
-        grid.append(card.element);
-      }
+      cards.push(...this.fillGrid(grid, group.items, this.shapeOf(group.id), group.layout === "list", [this.prefs.layout?.[group.id], store.schema.layout?.[group.id]], group.id));
       section.append(grid);
       this.main.append(section);
     }
@@ -237,6 +287,7 @@ export class View implements CardHost {
     this.status.setAttribute("role", "status");
     this.main.append(this.status, this.announcer.element);
     container.append(this.main);
+    this.measureGrids(this.main);
     this.tabs.push({ id: "compact", tab: el("button"), pane: this.main, cards });
     this.active = "compact";
   }
@@ -245,18 +296,52 @@ export class View implements CardHost {
   // Cards
   // ---------------------------------------------------------------------------------------------
 
+  /** A group's grid, or the panel's where the group has none of its own. */
+  private shapeOf(groupId: string): GridShape {
+    const schema = this.store().schema;
+    return schema.groups.find((group) => group.id === groupId)?.grid ?? schema.grid;
+  }
+
+  /** How a card may be sized, in its own group's grid: by what it shows, or as code says. */
+  private sizing(item: ItemSchema): Sizing {
+    const group = this.items.get(`${item.type}:${item.id}`)?.group;
+    const shape = group === undefined ? this.store().schema.grid : this.shapeOf(group);
+    const chart = item.type === "value" && item.chart !== undefined ? (this.items.get(`chart:${item.chart}`)?.item as ChartSchema | undefined) : undefined;
+    const drawn = chart === undefined ? undefined : chart.kind === "sparkline" ? "spark" : chart.kind === "heatmap" ? "heatmap" : chart.kind === "gauge" ? "gauge" : chart.over === "keys" || chart.kind === "histogram" ? "bars" : "plot";
+    return sizingOf(item, shape.columns, drawn);
+  }
+
+  /**
+   * Builds the cards of `items` into `grid` and places them: in the order and at the sizes the
+   * layouts give, highest first. A group's grid is kept, for arranging on the page.
+   */
+  private fillGrid(grid: HTMLElement, items: readonly ItemSchema[], shape: GridShape, list: boolean, layouts: ReadonlyArray<GroupLayout | undefined> = [], groupId?: string): Card[] {
+    const cards: Card[] = [];
+    const placed: Placed[] = [];
+    for (const item of items) {
+      if (item.type === "chart" && item.placement === "alone") continue;
+      const card = this.buildCard(item);
+      cards.push(card);
+      placed.push({ id: card.id, element: card.element, sizing: this.sizing(item), label: "label" in item ? item.label : item.title });
+    }
+    const view = new GridView(grid, shape, list);
+    view.place(placed, layouts);
+    if (groupId !== undefined) this.grids.set(groupId, view);
+    return cards;
+  }
+
   private buildCard(item: ItemSchema): Card {
     switch (item.type) {
       case "value":
         return valueCard(this, item);
       case "chart": {
-        const card = frame(this, `chart:${item.id}`, undefined, spanClass(item.span, "full"));
+        const card = frame(this, `chart:${item.id}`, item.title, item.description);
         const view = extras().buildChart?.(item, this.values, this.t);
         if (view !== undefined) card.body.append(view.element);
         return { id: card.id, element: card.element, update: (store, _now, visible) => visible && view?.draw(store) };
       }
       case "table": {
-        const card = frame(this, `table:${item.id}`, item.title, spanClass(item.span, "full"), item.description);
+        const card = frame(this, `table:${item.id}`, item.title, item.description);
         const view = extras().buildTable?.(item, this.deps.api, this.t);
         if (view !== undefined) card.body.append(view.element);
         let loaded = false;
@@ -276,49 +361,114 @@ export class View implements CardHost {
       }
       case "feed": {
         const view = buildFeed(item, this.t);
-        const card = frame(this, `feed:${item.id}`, item.title, spanClass(item.span, 2), item.description);
+        const card = frame(this, `feed:${item.id}`, item.title, item.description);
         card.body.append(view.element);
         return { id: card.id, element: card.element, update: (store, now, visible) => visible && view.update(store, now) };
       }
-      case "profile": {
-        const view = buildProfile(item, this.deps.api, this.t, this.deps.refresh);
-        const card = frame(this, `profile:${item.id}`, item.title, spanClass(item.span, 1), item.description);
-        card.body.append(view.element);
-        return { id: card.id, element: card.element, update: (store) => view.update(store) };
-      }
+      case "profile":
+        return profileCard(this, item);
       case "action":
         return actionCard(this, item);
     }
   }
 
   // ---------------------------------------------------------------------------------------------
-  // The viewer's own colours
+  // The viewer's own settings
   // ---------------------------------------------------------------------------------------------
 
-  /** A select in the header: follow the system, light or dark, over whatever the panel says, for this viewer only. */
-  private schemeSwitch(): HTMLElement {
-    const t = this.t;
-    const select = el("select", "apb-select apb-scheme");
-    select.setAttribute("aria-label", t("scheme"));
-    for (const [value, key] of [["", "scheme"], ["auto", "schemeAuto"], ["light", "schemeLight"], ["dark", "schemeDark"]] as const) {
-      const option = el("option", null, value === "" ? `${t("scheme")}: ${t(this.deps.scheme === "auto" ? "schemeAuto" : this.deps.scheme === "light" ? "schemeLight" : "schemeDark")}` : t(key));
-      option.value = value;
-      select.append(option);
-    }
-    select.value = this.prefs.scheme ?? "";
-    select.addEventListener("change", () => {
-      const value = select.value;
-      this.prefs.scheme = value === "auto" || value === "light" || value === "dark" ? value : undefined;
-      this.prefs.save();
-      this.applyScheme();
-    });
-    return select;
+  schema(): PanelSchema {
+    return this.current.schema;
   }
 
-  private applyScheme(): void {
-    const scheme = this.prefs.scheme ?? this.deps.scheme;
-    if (scheme === "auto") this.deps.container.removeAttribute("data-scheme");
-    else this.deps.container.dataset.scheme = scheme;
+  /**
+   * The header's button: arranges the cards of the tab that is open, and stops arranging when it is
+   * pressed again. Offered only where there is a group to arrange — not on Pinned, search results or
+   * Activity, and not in a panel with no groups.
+   */
+  private arrangeButton(): HTMLButtonElement {
+    const button = el("button", "apb-arrange-button");
+    button.type = "button";
+    button.setAttribute("aria-pressed", "false");
+    button.append(el("span", "apb-arrange-icon"), el("span", "apb-arrange-word", this.t("arrange")));
+    button.addEventListener("click", () => {
+      if (this.arranging !== undefined) this.arranging.stop(true);
+      else this.editLayout();
+      this.syncArrangeButton();
+    });
+    this.arrange = button;
+    this.syncArrangeButton();
+    return button;
+  }
+
+  /** Whether the tab that is open can be arranged, and whether it is being arranged now. */
+  private syncArrangeButton(): void {
+    const button = this.arrange;
+    if (button === undefined) return;
+    const arranging = this.arranging !== undefined;
+    const group = this.current.schema.groups.some((entry) => entry.id === this.active);
+    button.disabled = !group && !arranging;
+    button.setAttribute("aria-pressed", String(arranging));
+    button.setAttribute("aria-label", this.t(arranging ? "layoutStop" : "layoutEdit"));
+    button.title = this.t(!group && !arranging ? "layoutNoGroup" : arranging ? "layoutStop" : "layoutEdit");
+  }
+
+  /** Starts arranging the cards of the open group's tab. */
+  editLayout(): void {
+    this.arranging?.stop(true);
+    this.arranging = startArranging(this);
+    this.syncArrangeButton();
+  }
+
+  /** Arranging ended: the updates it held back, and a structure that arrived meanwhile, are drawn now. */
+  arrangingStopped(): void {
+    this.arranging = undefined;
+    this.syncArrangeButton();
+    // Measuring was paused while arranging: the cards are fitted to the sizes they were given now.
+    for (const view of this.grids.values()) view.layout();
+    const held = this.held;
+    this.held = undefined;
+    if (held !== undefined) this.build(held);
+    this.update();
+  }
+
+  /** Forgets this viewer's own layout: every group goes back to the panel's. */
+  resetLayout(): void {
+    this.prefs.layout = undefined;
+    this.prefs.save();
+    for (const [id, view] of this.grids) view.place(view.declared(), [this.current.schema.layout?.[id]]);
+  }
+
+  /** The group whose tab is open, which is the one the header's button arranges. */
+  arrangeableGroup(): { id: string; title: string } | undefined {
+    const group = this.current.schema.groups.find((entry) => entry.id === this.active);
+    return group === undefined ? undefined : { id: group.id, title: group.title };
+  }
+
+  mainRegion(): HTMLElement {
+    return this.main;
+  }
+
+  /** Puts this viewer's choices on the root, where the stylesheet reads them. */
+  applyPrefs(): void {
+    const { container } = this.deps;
+    const prefs = this.prefs;
+    const scheme = prefs.scheme ?? this.deps.scheme;
+    if (scheme === "auto") container.removeAttribute("data-scheme");
+    else container.dataset.scheme = scheme;
+    const theme = this.current.schema.theme;
+    const chosen = prefs.theme !== undefined && prefs.theme !== theme.name && (theme.offered ?? []).some((entry) => entry.name === prefs.theme) ? prefs.theme : undefined;
+    if (chosen === undefined) container.removeAttribute("data-theme");
+    else container.dataset.theme = chosen;
+    const flags: Array<[string, boolean]> = [
+      ["density", prefs.density === "compact"],
+      ["flash", !prefs.flash],
+      ["motion", !prefs.motion],
+      ["trends", !prefs.trends],
+    ];
+    for (const [name, set] of flags) {
+      if (!set) container.removeAttribute(`data-${name}`);
+      else container.setAttribute(`data-${name}`, name === "density" ? "compact" : "off");
+    }
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -360,6 +510,7 @@ export class View implements CardHost {
     card.tabIndex = -1;
     card.scrollIntoView?.({ block: "center" });
     card.focus();
+    flash(card, "data-reached");
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -377,13 +528,8 @@ export class View implements CardHost {
     clear(entry.pane);
     entry.cards = [];
     const grid = el("div", "apb-grid");
-    for (const id of this.prefs.pinned) {
-      const found = this.items.get(id);
-      if (found === undefined) continue;
-      const card = this.buildCard(found.item);
-      entry.cards.push(card);
-      grid.append(card.element);
-    }
+    const items = [...this.prefs.pinned].map((id) => this.items.get(id)?.item).filter((item): item is ItemSchema => item !== undefined);
+    entry.cards = this.fillGrid(grid, items, this.store().schema.grid, false);
     entry.pane.append(grid);
   }
 
@@ -422,14 +568,13 @@ export class View implements CardHost {
     clear(entry.pane);
     entry.cards = [];
     const grid = el("div", "apb-grid");
+    const found: ItemSchema[] = [];
     for (const [, { item }] of this.items) {
       if (item.type === "chart" && item.placement === "alone") continue;
       const text = `${"label" in item ? item.label : item.title} ${item.description ?? ""} ${item.id}`.toLowerCase();
-      if (!text.includes(needle)) continue;
-      const card = this.buildCard(item);
-      entry.cards.push(card);
-      grid.append(card.element);
+      if (text.includes(needle)) found.push(item);
     }
+    entry.cards = this.fillGrid(grid, found, this.store().schema.grid, false);
     if (entry.cards.length === 0) entry.pane.append(el("p", "apb-empty", this.t("searchEmpty", { query: this.query })));
     entry.pane.append(grid);
     entry.tab.hidden = false;
@@ -478,6 +623,12 @@ export class View implements CardHost {
   }
 
   private select(id: string, fromUser: boolean, focus = false): void {
+    const leaving = this.active;
+    // Arranging belongs to the tab it started on. Leaving that tab puts back what was there, the
+    // way Cancel does: an arrangement nobody can see is not one anybody can finish.
+    if (this.arranging !== undefined && leaving !== id && leaving !== "") this.arranging.stop(true);
+    const moving = fromUser && this.deps.standalone && leaving !== id && leaving !== "";
+    if (moving) this.scrolled.set(leaving, window.scrollY);
     this.active = id;
     for (const entry of this.tabs) {
       const on = entry.id === id;
@@ -485,7 +636,13 @@ export class View implements CardHost {
       entry.tab.tabIndex = on ? 0 : -1;
       entry.pane.hidden = !on;
       if (on && focus) entry.tab.focus();
+      if (on) this.bringIntoStrip(entry.tab);
     }
+    const shown = this.tabs.find((entry) => entry.id === id)?.pane;
+    if (shown !== undefined) this.measureGrids(shown);
+    // Another tab is another group to arrange, or none at all.
+    if (leaving !== id) this.syncArrangeButton();
+    if (moving) this.restoreScroll(id);
     if (fromUser && this.deps.standalone && id !== RESULTS) history.replaceState(null, "", `#${encodeURIComponent(id)}`);
     if (id === ACTIVITY) {
       this.activity?.show();
@@ -495,6 +652,39 @@ export class View implements CardHost {
       );
     }
     this.update();
+  }
+
+  /** Gives the grids under `node` their column count now, before the page is painted. */
+  private measureGrids(node: HTMLElement): void {
+    for (const grid of Array.from(node.querySelectorAll(".apb-grid"))) GridView.of(grid)?.measure();
+  }
+
+  /** Scrolls the tab strip, and only the strip, so `tab` is in it with a little room to spare. */
+  private bringIntoStrip(tab: HTMLElement): void {
+    const strip = this.tablist;
+    if (strip === undefined || strip.scrollWidth <= strip.clientWidth) return;
+    const outer = strip.getBoundingClientRect();
+    const inner = tab.getBoundingClientRect();
+    const room = 32;
+    if (inner.left < outer.left + room) strip.scrollLeft -= outer.left + room - inner.left;
+    else if (inner.right > outer.right - room) strip.scrollLeft += inner.right - (outer.right - room);
+    this.markEdges();
+  }
+
+  /** Tells the stylesheet which ends of the tab strip have more tabs beyond them, to fade those. */
+  private markEdges(): void {
+    const strip = this.tablist;
+    if (strip === undefined) return;
+    strip.toggleAttribute("data-more-before", strip.scrollLeft > 1);
+    strip.toggleAttribute("data-more-after", strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1);
+  }
+
+  /** Back to where this tab was left; a tab not seen yet starts at its top when the band was floating. */
+  private restoreScroll(id: string): void {
+    const kept = this.scrolled.get(id);
+    const bandTop = this.nav.getBoundingClientRect().top + window.scrollY;
+    const top = kept ?? (this.nav.hasAttribute("data-stuck") ? bandTop - 1 : undefined);
+    if (top !== undefined) window.scrollTo({ top, behavior: "instant" as ScrollBehavior });
   }
 
   /** The tablist's keyboard contract: arrows move between tabs, Home and End jump, and a tab is activated as it is focused. */

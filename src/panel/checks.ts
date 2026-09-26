@@ -1,8 +1,17 @@
 /** Small checks and helpers the panel's modules share. */
 import { AdminPanelConfigError } from "../errors.js";
-import type { Span } from "../types.js";
+import type { CardSize, Span } from "../types.js";
 import type { ValueSource } from "../values/handle.js";
 import { toJson } from "../values/kinds.js";
+import { checkSize } from "./layout.js";
+
+/** A card's size in cells, as code declares it. See src/panel/layout.ts. */
+export function checkCardSize(label: string, size: CardSize | undefined): CardSize | undefined {
+  if (size === undefined) return undefined;
+  const checked = checkSize(size);
+  if (typeof checked === "string") throw new AdminPanelConfigError(`"${label}" has size ${JSON.stringify(size)}: ${checked}`);
+  return checked;
+}
 
 export function checkSpan(label: string, span: Span | undefined): Span | undefined {
   if (span === undefined || span === 1 || span === 2 || span === 3 || span === "full") return span;

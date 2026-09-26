@@ -52,6 +52,12 @@ enabled = false
 # The prefix of every metric name.
 prefix = "admin_panel"
 
+[health]
+# GET /healthz without authentication: "ok", or "ok, 2 warnings" when the panel holds warning
+# notices, and nothing else. Off by default, because it answers anybody; turn it on for a load
+# balancer's health check.
+enabled = false
+
 [throttle]
 # Refuse an address with 429 after too many failed sign-ins.
 enabled = true

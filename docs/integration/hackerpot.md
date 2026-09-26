@@ -6,7 +6,7 @@ Hits by detector, and detector switches.
 
 ---
 
-Runnable: [`examples/hackerpot.ts`](../../examples/hackerpot.ts).
+The preset is exercised by `tests/presets.test.ts`; keeping and verifying a chained change log is shown in [Changing production safely](../examples.md#changing-production-safely).
 
 ```ts
 import { hackerpotPanel } from "@osqd/admin-panel-builder/presets";
@@ -25,6 +25,9 @@ const { enabled } = hackerpotPanel(panel, engine, detectorIds);
   detector list, so a new detector gets a switch with no panel change.
 - **Dark by default** (`colorScheme: "dark"`) and the OSQD theme, so it sits beside hackerpot's own
   dashboard as one product.
+
+The example keeps a hash-chained change log that rotates daily and keeps 90 days (`APB_LOG`), and a
+**Verify the change log** action that checks it from the page, as `apb verify-log` does from a shell.
 
 hackerpot's dashboard remains the place to read incidents; this panel is for the handful of numbers and
 switches an operator wants beside the application.

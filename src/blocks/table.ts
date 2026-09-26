@@ -14,7 +14,7 @@ import { AdminPanelConfigError } from "../errors.js";
 import { withDeadline } from "../internal/async.js";
 import { checkId, slug } from "../internal/ids.js";
 import { rejectUnknown } from "../internal/options.js";
-import type { JsonValue, Span, Status, StatusRule, TableColumn, TableOptions, TableQuery, TableRowsAnswer, TableSchema } from "../types.js";
+import type { CardSize, JsonValue, Span, Status, StatusRule, TableColumn, TableOptions, TableQuery, TableRowsAnswer, TableSchema } from "../types.js";
 import { toJson } from "../values/kinds.js";
 import { checkStatusRule, statusOf } from "../values/status.js";
 
@@ -24,7 +24,7 @@ export const MAX_PAGE_SIZE = 200;
 export const MAX_SEARCH_LENGTH = 200;
 const DEFAULT_TABLE_TIMEOUT_MS = 10_000;
 const COLUMN_KEYS = ["key", "label", "format", "unit", "decimals", "sortable", "status"];
-const TABLE_KEYS = ["id", "label", "description", "group", "order", "span", "columns", "rows", "fetch", "rowId", "pageSize", "searchable", "actions", "timeoutMs"];
+const TABLE_KEYS = ["id", "label", "description", "group", "order", "span", "size", "columns", "rows", "fetch", "rowId", "pageSize", "searchable", "actions", "timeoutMs"];
 
 export interface ResolvedColumn {
   key: string;
@@ -57,6 +57,7 @@ export class PanelTable<Row = Record<string, unknown>> {
   private readonly searchable: boolean;
   private readonly timeoutMs: number;
   private readonly span: Span | undefined;
+  private readonly size: CardSize | undefined;
   private readonly description: string | undefined;
 
   /** @internal Built by the panel; declare tables with `table()`. */
@@ -75,6 +76,7 @@ export class PanelTable<Row = Record<string, unknown>> {
     this.searchable = options.searchable !== false;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TABLE_TIMEOUT_MS;
     this.span = options.span;
+    this.size = options.size;
     this.description = options.description;
     this.columns = options.columns.map((column) => resolveColumn(label, column));
     this.rowActions = (options.actions ?? []).map((action, index) => {
@@ -111,6 +113,7 @@ export class PanelTable<Row = Record<string, unknown>> {
     };
     if (this.description !== undefined) schema.description = this.description;
     if (this.span !== undefined) schema.span = this.span;
+    if (this.size !== undefined) schema.size = this.size;
     return schema;
   }
 

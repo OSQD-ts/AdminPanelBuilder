@@ -1,17 +1,16 @@
 /**
- * The cards that are not a single value: feeds, profiles, and actions that ask for input. Tables
- * are in `table.ts`, loaded with the charts only on panels that have them.
+ * The pieces of cards that are not a single value: feeds, and the input an action asks for. Tables
+ * are in `table.ts`, loaded with the charts only on panels that have them; profiles are cards of
+ * their own, in `cards.ts`, since they are changed the way values are.
  *
  * Each follows the rules the value cards do: text through `textContent` only, refusals shown in
  * place in the server's words, a second click on the same button for anything declared confirm,
  * and nothing rebuilt while somebody is typing into it.
  */
-import type { ActionSchema, FeedEntry, FeedSchema, InputSchema, JsonValue, ProfileSchema } from "../types.js";
-import type { Api } from "./api.js";
-import { clear, el, uid } from "./dom.js";
+import type { ActionSchema, FeedEntry, FeedSchema, InputSchema, JsonValue } from "../types.js";
+import { busy, clear, el, uid } from "./dom.js";
 import { formatAgo, formatValue } from "./format.js";
-import { explain } from "./explain.js";
-import type { Translate } from "./i18n.js";
+import { localeSpec, type Translate } from "./i18n.js";
 import type { Store } from "./store.js";
 
 const ARM_MS = 5000;
@@ -37,7 +36,7 @@ export function confirmingButton(label: string, confirm: boolean, className: str
     button.dataset.armed = "false";
     button.textContent = label;
     button.disabled = true;
-    run().finally(() => {
+    busy(button, run()).finally(() => {
       button.disabled = false;
     });
   });
@@ -125,7 +124,7 @@ export function buildFeed(schema: FeedSchema, t: Translate): FeedView {
       if (key === shownKey && list.childElementCount > 0) {
         // Only the relative times move; the rows stay, and so does any text somebody selected.
         list.querySelectorAll<HTMLElement>("[data-at]").forEach((node) => {
-          node.textContent = formatAgo(Number(node.dataset.at), now);
+          node.textContent = formatAgo(Number(node.dataset.at), now, t.locale);
         });
         return;
       }
@@ -143,7 +142,7 @@ export function buildFeed(schema: FeedSchema, t: Translate): FeedView {
       for (const entry of [...shown].reverse()) {
         const item = el("li", "apb-feed-entry");
         item.dataset.level = entry.level;
-        const time = el("time", "apb-feed-time", formatAgo(entry.at, now));
+        const time = el("time", "apb-feed-time", formatAgo(entry.at, now, t.locale));
         time.dateTime = new Date(entry.at).toISOString();
         time.dataset.at = String(entry.at);
         const level = entry.level === "info" ? undefined : el("span", "apb-status-word", t(entry.level === "bad" ? "statusBad" : "statusWarn"));
@@ -156,58 +155,19 @@ export function buildFeed(schema: FeedSchema, t: Translate): FeedView {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Profiles
-// ---------------------------------------------------------------------------------------------
-
-export interface ProfileView {
-  element: HTMLElement;
-  update(store: Store): void;
-}
-
-export function buildProfile(schema: ProfileSchema, api: Api | undefined, t: Translate, afterApply: () => void): ProfileView {
-  const wrap = el("div", "apb-profile");
-  const state = el("span", "apb-badge", t("profileActive"));
-  state.hidden = true;
-  const list = el("ul", "apb-profile-settings");
-  for (const setting of schema.settings) list.append(el("li", null, setting.to === undefined ? setting.label : `${setting.label} → ${formatValue(setting.to)}`));
-  const result = el("p", "apb-result");
-  result.setAttribute("aria-live", "polite");
-  const button = confirmingButton(t("applyProfile"), schema.confirm, "apb-button", t, async () => {
-    if (api === undefined) return;
-    try {
-      await api.applyProfile(schema.id);
-      result.dataset.ok = "true";
-      result.textContent = "";
-      afterApply();
-    } catch (problem) {
-      result.dataset.ok = "false";
-      result.textContent = explain(problem, t);
-    }
-  });
-  button.disabled = !schema.writable || api === undefined;
-  wrap.append(state, list, button, result);
-  return {
-    element: wrap,
-    update(store) {
-      state.hidden = !store.activeProfiles.has(schema.id);
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------------------------
 // Action input
 // ---------------------------------------------------------------------------------------------
 
 /** The fields an action asks for, and a way to read them. Checks what it can; the server checks everything. */
-export function buildInputs(schema: ActionSchema): { element: HTMLElement; read(): Record<string, JsonValue> } | undefined {
+export function buildInputs(schema: ActionSchema, t: Translate): { element: HTMLElement; read(): Record<string, JsonValue> } | undefined {
   if (schema.input === undefined || schema.input.length === 0) return undefined;
   const wrap = el("div", "apb-inputs");
   const readers: Array<() => [string, JsonValue | undefined]> = [];
   for (const field of schema.input) {
     const id = uid("input");
-    const label = el("label", "apb-input-label", field.optional ? `${field.label} (optional)` : field.label);
+    const label = el("label", "apb-input-label", field.optional ? t("optionalField", { label: field.label }) : field.label);
     label.htmlFor = id;
-    const control = fieldControl(field, id);
+    const control = fieldControl(field, id, t);
     wrap.append(label, control.node);
     if (field.description !== undefined) wrap.append(el("p", "apb-hint", field.description));
     readers.push(() => [field.name, control.read()]);
@@ -225,7 +185,7 @@ export function buildInputs(schema: ActionSchema): { element: HTMLElement; read(
   };
 }
 
-function fieldControl(field: InputSchema, id: string): { node: HTMLElement; read(): JsonValue | undefined } {
+function fieldControl(field: InputSchema, id: string, t: Translate): { node: HTMLElement; read(): JsonValue | undefined } {
   const c = field.constraints;
   if (field.kind === "boolean") {
     const box = el("input", "apb-checkbox");
@@ -239,7 +199,7 @@ function fieldControl(field: InputSchema, id: string): { node: HTMLElement; read
     select.id = id;
     if (field.optional) select.append(el("option", null, ""));
     (c.options ?? []).forEach((option, index) => {
-      const node = el("option", null, formatValue(option));
+      const node = el("option", null, formatValue(option, localeSpec(t)));
       node.value = String(index);
       if (JSON.stringify(option) === JSON.stringify(field.default)) node.selected = true;
       select.append(node);
@@ -278,6 +238,3 @@ function fieldControl(field: InputSchema, id: string): { node: HTMLElement; read
   };
 }
 
-export function ago(at: number, now: number): string {
-  return formatAgo(at, now);
-}

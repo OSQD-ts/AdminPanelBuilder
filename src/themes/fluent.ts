@@ -30,6 +30,7 @@ export const fluentTheme: Theme = {
     headerInk: "#242424",
     grid: "#e0e0e0",
     shadow: "0 0 2px rgba(0,0,0,.12), 0 2px 4px rgba(0,0,0,.14)",
+    shadowRaised: "0 0 2px rgba(0,0,0,.12), 0 4px 8px rgba(0,0,0,.14)",
     chart: ["#0f6cbd", "#ca5010", "#107c10", "#c239b3", "#8764b8", "#986f0b", "#038387", "#616161"],
   },
   dark: {
@@ -53,6 +54,7 @@ export const fluentTheme: Theme = {
     headerInk: "#ffffff",
     grid: "#3d3d3d",
     shadow: "0 0 2px rgba(0,0,0,.24), 0 2px 4px rgba(0,0,0,.28)",
+    shadowRaised: "0 0 2px rgba(0,0,0,.24), 0 4px 8px rgba(0,0,0,.28)",
     chart: ["#479ef5", "#f7630c", "#54b054", "#ee5fb7", "#b4a0ff", "#e8c54a", "#4bc9c9", "#bdbdbd"],
   },
   shape: {

@@ -14,7 +14,9 @@
 import type { PanelSchema, PanelState } from "../types.js";
 import { Api, ApiError } from "./api.js";
 import type { Root } from "./dom.js";
-import { type Translate, translator } from "./i18n.js";
+import { explain } from "./explain.js";
+import { chooseLocale, type Translate, translator } from "./i18n.js";
+import { loadPrefs, type Prefs } from "./prefs.js";
 import { extras, loadExtras, needsExtras } from "./registry.js";
 import { View, type ViewDeps } from "./render.js";
 import { capacities, createStore, mergeState, type Store } from "./store.js";
@@ -52,10 +54,30 @@ export function mount(options: MountOptions): MountedPanel {
   let failures = 0;
 
   let deps: ViewDeps | undefined;
+  let prefs: Prefs | undefined;
+  /** Other languages' words, fetched once each from the handler when a viewer asks for them. */
+  const languages = new Map<string, Record<string, string>>();
 
-  /** The chart and table code, fetched from the handler before the first schema that needs it is drawn. */
+  const prefsFor = (schema: PanelSchema): Prefs => {
+    prefs ??= loadPrefs(`apb:${schema.title}:${schema.instance ?? ""}`);
+    return prefs;
+  };
+  const wantedLanguage = (schema: PanelSchema): string => chooseLocale(schema.locale, prefsFor(schema).language, schema.locales ?? ["en"], typeof navigator === "undefined" ? [] : navigator.languages);
+  /** Whether drawing this schema needs anything fetched first: the chart code, or a language. */
+  const needsPreparing = (schema: PanelSchema): boolean => {
+    if (options.api === undefined) return false;
+    const language = wantedLanguage(schema);
+    return (needsExtras(schema) && extras().buildChart === undefined) || (language !== "en" && language !== schema.locale && !languages.has(language));
+  };
+
+  /** The chart and table code and the viewer's language, fetched from the handler before the first schema that needs them is drawn. */
   const prepare = async (schema: PanelSchema): Promise<void> => {
     if (options.api !== undefined && needsExtras(schema) && extras().buildChart === undefined) await loadExtras(options.api.replace(/\/+$/, ""));
+    const language = wantedLanguage(schema);
+    if (api !== undefined && language !== "en" && language !== schema.locale && !languages.has(language)) {
+      // A language that cannot be fetched is not a reason to show nothing: the panel's own is used.
+      languages.set(language, await api.messages(language).catch(() => ({})));
+    }
   };
 
   const show = (full: PanelSchema, state: PanelState): void => {
@@ -63,8 +85,12 @@ export function mount(options: MountOptions): MountedPanel {
     const only = options.group;
     const schema = only === undefined ? full : { ...full, groups: full.groups.filter((group) => group.id === only || group.title === only) };
     if (options.compact === true) container.classList.add("apb-compact");
-    container.lang = schema.locale;
-    t = translator(schema);
+    const wanted = wantedLanguage(schema);
+    const fetched = languages.get(wanted);
+    const language = wanted === schema.locale || wanted === "en" || (fetched !== undefined && Object.keys(fetched).length > 0) ? wanted : schema.locale === "auto" ? "en" : schema.locale;
+    const translations = language === "en" ? undefined : language === schema.locale ? schema.translations : languages.get(language);
+    container.lang = language;
+    t = translator({ locale: language, messages: schema.messages, translations });
     store = createStore(schema, state);
     deps ??= {
       root: options.root,
@@ -74,10 +100,26 @@ export function mount(options: MountOptions): MountedPanel {
       api,
       compact: options.compact === true,
       scheme: schema.theme.scheme,
+      prefs: prefsFor(schema),
+      language,
+      languages: api === undefined ? [] : (schema.locales ?? []),
+      setLanguage:
+        api === undefined
+          ? undefined
+          : (code) => {
+              const kept = prefsFor(schema);
+              kept.language = code;
+              kept.save();
+              void reload();
+            },
+      // Everything the view is handed reads through this, so a language chosen later reaches every
+      // card without rebuilding the deps: the call, the locale, and — LOAD-BEARING — `has`, which is
+      // how a keyed refusal or notice is recognised as one this page can say in its own words.
       t: Object.assign((key: Parameters<Translate>[0], values?: Parameters<Translate>[1]) => t(key, values), {
         get locale() {
           return t.locale;
         },
+        has: (key: string) => t.has(key),
       }),
       refresh: () => schedule(0),
       loadActivity:
@@ -93,6 +135,7 @@ export function mount(options: MountOptions): MountedPanel {
     };
     const current = deps;
     current.scheme = schema.theme.scheme;
+    current.language = language;
     view ??= new View(current, store);
     view.build(store);
     view.update();
@@ -143,7 +186,7 @@ export function mount(options: MountOptions): MountedPanel {
       }
       const wait = Math.min(MAX_BACKOFF_MS, (store?.schema.pollMs ?? 1000) * 2 ** Math.min(failures, 5));
       view?.setStatus(t("reconnecting", { seconds: Math.round(wait / 1000) }), "trouble");
-      if (view === undefined) options.container.textContent = error instanceof Error ? error.message : "The panel could not be loaded.";
+      if (view === undefined) options.container.textContent = error instanceof Error ? explain(error, t) : t("loadFailed");
       schedule(wait);
     }
   };
@@ -213,7 +256,7 @@ export function mount(options: MountOptions): MountedPanel {
         schedule(schema.pollMs);
       }
     };
-    if (extras().buildChart === undefined && needsExtras(schema) && options.api !== undefined) {
+    if (needsPreparing(schema)) {
       options.container.textContent = t("loading");
       prepare(schema).then(start, (problem: unknown) => {
         options.container.textContent = problem instanceof Error ? problem.message : String(problem);

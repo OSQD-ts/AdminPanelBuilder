@@ -6,6 +6,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { applyEnvironment, ConfigError, DEFAULT_CONFIG, listenOptions, loadConfig, parseToml, planReload, printConfig, readConfig, Section } from "../src/config/index.js";
+import { createAdminPanel } from "../src/index.js";
+import { listenPanel } from "../src/adapters/listen.js";
 
 const read = (text: string) => readConfig(parseToml(text));
 
@@ -78,7 +80,25 @@ describe("the environment", () => {
 
   it("turns into listen() options", async () => {
     const config = await loadConfig({ text: '[controls]\nedit = true\n[view]\ngroups = ["Game"]\n[metrics]\nenabled = true', env: { PANEL_TOKEN: "a-token-long-enough-1" } });
-    expect(listenOptions(config)).toMatchObject({ port: 9780, auth: { token: "a-token-long-enough-1" }, controls: { edit: true, actions: false }, groups: ["Game"], metrics: { prefix: "admin_panel" }, writeLimit: { perMinute: 60 } });
+    expect(listenOptions(config)).toMatchObject({ port: 9780, auth: { token: "a-token-long-enough-1" }, controls: { edit: true, actions: false }, groups: ["Game"], metrics: { prefix: "admin_panel" }, writeLimit: { perMinute: 60 }, health: false });
+  });
+
+  it("offers the health check when the file asks for it, and reloads without a restart", async () => {
+    const off = await loadConfig({ text: "", env: {} });
+    expect(listenOptions(off).health).toBe(false);
+    const on = await loadConfig({ text: "[health]\nenabled = true", env: {} });
+    expect(listenOptions(on).health).toBe(true);
+    expect(planReload(off, on, "SIGHUP")).toMatchObject({ applied: ["health.enabled"], requiresRestart: [] });
+    // A listener built from it answers /healthz to anybody, as the option does.
+    const panel = createAdminPanel();
+    const server = await listenPanel(panel, { ...listenOptions(on), port: 0 });
+    try {
+      const answer = await fetch(`${server.url.replace(/\/$/, "")}/healthz`);
+      expect([answer.status, await answer.text()]).toEqual([200, "ok"]);
+    } finally {
+      await server.close();
+      panel.close();
+    }
   });
 });
 
@@ -128,6 +148,38 @@ describe("fuzzing the parser", () => {
       } catch (error) {
         if (!(error instanceof ConfigError)) throw new Error(`${JSON.stringify(text)} threw ${String(error)}`);
       }
+    }
+  });
+});
+
+describe("reloading a running listener", () => {
+  it("applies what can change at once, logs what needs a restart, and keeps the old settings when the new ones are refused", async () => {
+    const { createAdminPanel } = await import("../src/index.js");
+    const { reloadListener } = await import("../src/config/index.js");
+    const panel = createAdminPanel();
+    panel.modifiable(1, { label: "Level", group: "Game" });
+    panel.modifiable(1, { label: "Other", group: "Mail" });
+    const env = { PANEL_TOKEN: "a-token-long-enough-1", PORT: "0" };
+    const config = await loadConfig({ text: "", env });
+    const server = await panel.listen(listenOptions(config));
+    const schema = async () => ((await (await fetch(`${server.url}api/schema`, { headers: { authorization: "Bearer a-token-long-enough-1" } })).json()) as { schema: { groups: Array<{ title: string }>; controls: { edit: boolean } } }).schema;
+    try {
+      expect((await schema()).controls.edit).toBe(false);
+      const lines: string[] = [];
+      const next = await loadConfig({ text: '[controls]\nedit = true\n[view]\ngroups = ["Game"]\n[listen]\nbase_path = "/admin"', env });
+      const kept = reloadListener(server, config, next, "a test", (line) => lines.push(line));
+      expect(lines).toEqual(["admin panel: listen.base_path was not reloaded (pages already open use the old path for every request); restart to apply it"]);
+      expect(kept.listen.basePath).toBe("/");
+      const now = await schema();
+      expect([now.controls.edit, now.groups.map((group) => group.title)]).toEqual([true, ["Game"]]);
+      expect(panel.notices().find((notice) => notice.id === "listener-reload")?.message).toMatch(/reloaded by a test: controls, groups/);
+      const refused = server.reload({ ...listenOptions(kept), auth: { token: "short" } }, { by: "a test" });
+      expect(refused.refused).toMatch(/at least 16/);
+      expect((await schema()).controls.edit).toBe(true);
+      expect(server.reload(listenOptions(kept), { by: "nobody" })).toEqual({ by: "nobody", applied: [], requiresRestart: [] });
+    } finally {
+      panel.close();
+      await server.close();
     }
   });
 });

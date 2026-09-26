@@ -42,5 +42,5 @@ nothing more. Koa and Fastify have [adapters of their own](koa-fastify.md).
 
 ## Related
 
-- [BIS](bis.md) — a full example with two listeners and an embedded page.
+- [Who sees what](../examples.md#who-sees-what) and [Inside another application](../examples.md#inside-another-application) — full examples with two listeners and embedded pages.
 - [Security](../operations/security.md) — why a panel should not be mounted in the application it reports on when that application is public.

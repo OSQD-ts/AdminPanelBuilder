@@ -28,6 +28,7 @@ export interface FeedDefinition {
   order: number;
   sequence: number;
   span: import("../types.js").Span | undefined;
+  size: import("../types.js").CardSize | undefined;
 }
 
 export class PanelFeed {

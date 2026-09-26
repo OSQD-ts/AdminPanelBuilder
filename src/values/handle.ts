@@ -51,12 +51,15 @@ export interface ValueDefinition {
   approval: boolean;
   timed: boolean;
   span: import("../types.js").Span | undefined;
+  size: import("../types.js").CardSize | undefined;
   visibleWhen: (() => boolean) | undefined;
   disabledWhen: (() => string | false | undefined) | undefined;
   /** Recent changes kept for the page's timeline; 0 keeps none. */
   timeline: number;
   validateAsync: ((next: never) => Promise<string | undefined>) | undefined;
   validateTimeoutMs: number;
+  /** An operator's change must say why: declared so, or needing approval. */
+  reasonRequired: boolean;
 }
 
 export class PanelValue<T> {

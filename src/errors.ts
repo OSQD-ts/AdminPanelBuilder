@@ -25,12 +25,15 @@ export interface Refusal {
 }
 
 export class ValueError extends Error {
-  /** Present for the refusals the page's messages translate; the sentence is always English. */
-  readonly refusal: Refusal | undefined;
+  /**
+   * The key the page translates and what fills it; the sentence is always English. A refusal written
+   * by the application (a validate() verdict) is keyed as itself, "refuseApp", and shown as written.
+   */
+  readonly refusal: Refusal;
 
   constructor(message: string, refusal?: Refusal) {
     super(message);
     this.name = "ValueError";
-    this.refusal = refusal;
+    this.refusal = refusal ?? { key: "refuseApp", params: { message } };
   }
 }

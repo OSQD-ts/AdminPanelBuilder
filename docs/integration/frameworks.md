@@ -14,7 +14,7 @@ app.all("/admin", (c) => handle(c.req.raw));
 app.all("/admin/*", (c) => handle(c.req.raw));
 ```
 
-Runnable and tested: [`examples/hono.ts`](../../examples/hono.ts).
+Runnable and tested: `fetchRoutes.hono` in [`examples/embedding.ts`](../../examples/embedding.ts).
 
 ## Next.js (app router)
 
@@ -28,7 +28,7 @@ export const dynamic = "force-dynamic";   // never cache a panel
 ```
 
 Keep the panel in a module of your own so every route shares it. Runnable and tested:
-[`examples/next-route.ts`](../../examples/next-route.ts).
+`fetchRoutes.next` in [`examples/embedding.ts`](../../examples/embedding.ts).
 
 ## NestJS
 

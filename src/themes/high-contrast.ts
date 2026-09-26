@@ -32,6 +32,7 @@ export const highContrastTheme: Theme = {
     headerInk: "#ffffff",
     grid: "#767676",
     shadow: "none",
+    shadowRaised: "none",
     chart: ["#0000cc", "#a00000", "#005a00", "#6b3e00", "#6600cc", "#004c66", "#8b0045", "#333333"],
   },
   dark: {
@@ -55,6 +56,7 @@ export const highContrastTheme: Theme = {
     headerInk: "#ffffff",
     grid: "#aaaaaa",
     shadow: "none",
+    shadowRaised: "none",
     chart: ["#ffff00", "#00ffff", "#7cfc00", "#ff80ff", "#ffa500", "#80c0ff", "#ff9090", "#ffffff"],
   },
   shape: {

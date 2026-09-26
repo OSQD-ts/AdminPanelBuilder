@@ -48,11 +48,27 @@ Everything left out comes from the theme it extends. `defineTheme` refuses a tok
 (`bakground`) by name — CSS would drop it silently — and a value that could end its declaration or its
 element (`;`, `{`, `}`, `<`, `>`, a comment). Extra `css` may not contain `</` or `<!--`.
 
+## Chosen by each viewer
+
+The page's Settings (the button in the header) lets each viewer pick a theme for themselves, kept in
+their browser. Every built-in theme is offered beside the panel's own; themes of your own join the list
+with `themes`, and `themes: false` keeps everybody on the panel's:
+
+```ts
+createAdminPanel({ theme: "material", themes: [brand] });   // material first, then brand and the built-ins
+createAdminPanel({ theme: brand, themes: false });           // brand for everybody, no choice
+```
+
+The page carries every offered theme's tokens in its one stylesheet, scoped to `data-theme`, so a choice
+applies at once and nothing is fetched — the CSP would refuse a second stylesheet. A theme's extra `css`
+applies only where it is the panel's own theme. The same dialog holds the viewer's colours, language,
+compact cards, whether values flash when they change, animations and trend chips.
+
 ## Tokens
 
 Colours, set for `light` and for `dark`: `background`, `surface`, `surfaceRaised`, `border`, `ink`,
 `inkSecondary`, `muted`, `accent`, `link`, `accentStrong`, `onAccent`, `focus`, `switchOn`, `ok`, `warn`,
-`bad`, `headerBackground`, `headerInk`, `grid`, `shadow`, and `chart`, eight colours.
+`bad`, `headerBackground`, `headerInk`, `grid`, `shadow`, `shadowRaised`, and `chart`, eight colours.
 
 Shape, shared by both: `font`, `monoFont`, `fontSize`, `radius`, `radiusSmall`, `spacing`, `buttonCase`
 (`"none"` or `"uppercase"`), `strongWeight`.

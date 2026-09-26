@@ -57,8 +57,14 @@ interface Allowed {
 }
 
 const SECURITY_HEADERS: Record<string, string> = { "cache-control": "no-store, max-age=0", "x-content-type-options": "nosniff", "x-frame-options": "DENY", "referrer-policy": "no-referrer" };
+/** How long a narrowed remote panel trusts what it learned of an operator's view, for paths that carry no structure number. */
+const CACHE_MS = 5000;
+/** Operators whose view is cached at once. */
+const MAX_CACHED_OPERATORS = 256;
 const FORWARDED = /^\/(api\/(schema|state|changes|notices|settings|openapi\.json|tables\/[^/]+)|panel\.css)$/;
-const WRITES = /^\/api\/(values|actions|profiles|pending|changes|tables|schedules|settings)\//;
+// A layout is forwarded only by a remote panel that shows every group: the upstream would read a
+// narrowed view's layout as the other groups' layouts removed.
+const WRITES = /^\/api\/((values|actions|profiles|pending|changes|tables|schedules|settings)\/|layout$)/;
 
 export function remotePanelHandler(options: RemotePanelOptions): (request: NodeLikeRequest, response: NodeLikeResponse) => void {
   rejectUnknown(options, ["upstream", "token", "basePath", "auth", "controls", "groups", "stream", "timeoutMs", "fetch"], "remotePanelHandler()");
@@ -103,11 +109,26 @@ export function remotePanelHandler(options: RemotePanelOptions): (request: NodeL
     }
     return allowed;
   };
-  const allowedFor = async (actor: string): Promise<Allowed | undefined> => {
+  /**
+   * What each operator may see, by the upstream's structure number: a poll whose state carries the
+   * structure already known costs one upstream request, not two. Other paths reuse an answer a few
+   * seconds old; a structure change (a declaration, a regrouping) fetches the schema again.
+   */
+  const cache = new Map<string, { structure: number; allowed: Allowed; at: number }>();
+  const remember = (actor: string, schema: PanelSchema): Allowed => {
+    const allowed = allowedBy(schema);
+    cache.delete(actor);
+    cache.set(actor, { structure: schema.structure, allowed, at: Date.now() });
+    if (cache.size > MAX_CACHED_OPERATORS) cache.delete(cache.keys().next().value as string);
+    return allowed;
+  };
+  const allowedFor = async (actor: string, structure?: number): Promise<Allowed | undefined> => {
     if (groups === undefined) return undefined;
+    const cached = cache.get(actor);
+    if (cached !== undefined && (structure === undefined ? Date.now() - cached.at < CACHE_MS : cached.structure === structure)) return cached.allowed;
     const reply = await call("/api/schema", actor);
     if (!reply.ok) throw new Error(`the upstream panel answered ${reply.status}`);
-    return allowedBy(((await reply.json()) as { schema: PanelSchema }).schema);
+    return remember(actor, ((await reply.json()) as { schema: PanelSchema }).schema);
   };
   const filterState = (state: PanelState, allowed: Allowed | undefined): PanelState => {
     if (allowed === undefined) return state;
@@ -211,15 +232,27 @@ export function remotePanelHandler(options: RemotePanelOptions): (request: NodeL
         if (!streaming) return error(response, 404, "this listener does not stream; poll /api/state instead");
         return forwardStream(response, `${path}${search === "" ? "" : `?${search}`}`, result.actor, headers);
       }
+      if (method === "GET" && path === "/api/state" && groups !== undefined) {
+        // The state first: its structure says whether the operator's cached view still holds.
+        const upstreamResponse = await call(`${path}${search === "" ? "" : `?${search}`}`, result.actor);
+        const text = await upstreamResponse.text();
+        if (!upstreamResponse.ok) return answer(response, upstreamResponse.status, { "content-type": "application/json; charset=utf-8" }, text);
+        const state = (JSON.parse(text) as { state: PanelState }).state;
+        const allowed = await allowedFor(result.actor, state.structure);
+        return answer(response, 200, { "content-type": "application/json; charset=utf-8" }, JSON.stringify({ state: filterState(state, allowed) }));
+      }
       if (method === "GET" && FORWARDED.test(path)) {
-        const allowed = await allowedFor(result.actor);
+        const allowed = path === "/api/schema" ? undefined : await allowedFor(result.actor);
         const table = /^\/api\/tables\/([^/]+)$/.exec(path);
         if (allowed !== undefined && table !== null && !allowed.ids.has(decodeURIComponent(table[1] as string))) return error(response, 404, `there is nothing at ${path}`);
         const upstreamResponse = await call(`${path}${search === "" ? "" : `?${search}`}`, result.actor);
         let text = await upstreamResponse.text();
         if (upstreamResponse.ok && path.startsWith("/api/")) {
           const body = JSON.parse(text) as Record<string, unknown>;
-          if (path === "/api/schema") text = JSON.stringify({ schema: localSchema(body.schema as PanelSchema) });
+          if (path === "/api/schema") {
+            if (groups !== undefined) remember(result.actor, body.schema as PanelSchema);
+            text = JSON.stringify({ schema: localSchema(body.schema as PanelSchema) });
+          }
           else if (allowed !== undefined && path === "/api/state") text = JSON.stringify({ state: filterState(body.state as PanelState, allowed) });
           else if (allowed !== undefined && path === "/api/changes") text = JSON.stringify({ changes: (body.changes as ChangeRecord[]).filter((change) => allowed.ids.has(change.target.split("/")[0] as string)) });
           else if (allowed !== undefined && path === "/api/settings") text = JSON.stringify({ settings: Object.fromEntries(Object.entries(body.settings as Record<string, unknown>).filter(([id]) => allowed.ids.has(id))) });

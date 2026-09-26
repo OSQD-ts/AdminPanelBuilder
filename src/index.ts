@@ -9,20 +9,24 @@
  */
 
 // The panel and the declaration functions.
-export { AdminPanel, APPROVAL_TTL_MS, canEdit, canRun, createAdminPanel, MAX_CHANGES, MAX_NOTICES, MAX_PENDING, MAX_REVERT_MS, MAX_SCHEDULE_AHEAD_MS, MAX_SCHEDULED, MAX_SERIES, MIN_POLL_INTERVAL_MS, narrowScope, PanelGroup } from "./core.js";
-export type { ActionOutcome, AdminPanelEvents, AdminPanelOptions, EditOutcome, Grants, PanelScope } from "./core.js";
-export { memorySync, redisSync, MAX_SYNC_MESSAGE_BYTES } from "./panel/sync.js";
-export type { PanelSync, RedisPublisherLike, RedisSubscriberLike, RedisSyncOptions, SyncMessage } from "./panel/sync.js";
+export { AdminPanel, APPROVAL_TTL_MS, canEdit, canRun, createAdminPanel, MAX_CHANGES, MAX_NOTICES, MAX_PENDING, MAX_REASON_LENGTH, MAX_REVERT_MS, MAX_SCHEDULE_AHEAD_MS, MAX_SCHEDULED, MAX_SERIES, MIN_POLL_INTERVAL_MS, narrowScope, PanelGroup } from "./core.js";
+export type { ActionOutcome, AdminPanelEvents, AdminPanelOptions, ChangeOptions, EditOutcome, Grants, PanelScope } from "./core.js";
+export type { RepeatRule } from "./panel/recurrence.js";
+export { memorySync, redisClaim, redisSync, MAX_SYNC_MESSAGE_BYTES } from "./panel/sync.js";
+export { MAX_CARD_ROWS, MAX_GRID_COLUMNS, MAX_LAYOUT_BYTES, MAX_LAYOUT_ENTRIES } from "./panel/layout.js";
+export type { ChangeMessage, PanelSync, PendingMessage, RedisPublisherLike, RedisSubscriberLike, RedisSyncOptions, ScheduleMessage, SyncMessage } from "./panel/sync.js";
 export { action, bind, chart, configure, counter, defaultPanel, feed, group, modifiable, percentiles, profile, rate, table, viewable } from "./default-panel.js";
 export { PanelFeed, MAX_FEED_CAPACITY, MAX_ENTRY_TEXT } from "./blocks/feed.js";
 export { PanelTable, MAX_PAGE_SIZE, MAX_SEARCH_LENGTH } from "./blocks/table.js";
 export type { Counter, CounterOptions, PercentileOptions, Percentiles, RateOptions } from "./blocks/counter.js";
-export { fileChangeLog, memoryChangeLog, verifyChain } from "./change-log.js";
-export type { ChangeLogStore } from "./change-log.js";
-export { jsonLineSink, MAX_WEBHOOK_RETRIES, notifySink, webhookSink } from "./audit.js";
-export type { AuditSink, NotifierLike, WebhookSinkOptions } from "./audit.js";
-export { MAX_REVOKED_SESSIONS, MIN_SESSION_SECRET_LENGTH, sessionInfo, signSession } from "./server/session.js";
-export type { SessionInfo, SessionSecret, SignSessionOptions } from "./server/session.js";
+export { fileChangeLog, memoryChangeLog, MIN_ROTATE_BYTES, verifyChain } from "./change-log.js";
+export type { ChangeLogStore, FileChangeLogOptions } from "./change-log.js";
+export { jsonLineSink, MAX_WEBHOOK_RETRIES, notifySink, otelLogSink, syslogSink, webhookSink } from "./audit.js";
+export type { AuditSink, NotifierLike, OtelLoggerLike, OtelLoggerProviderLike, SyslogSinkOptions, WebhookSinkOptions } from "./audit.js";
+export { otelMetrics } from "./otel.js";
+export type { MeterLike, MeterProviderLike, ObservableLike, ObservableResultLike, OtelMetricsOptions } from "./otel.js";
+export { MAX_REVOKED_SESSIONS, MIN_SESSION_SECRET_LENGTH, redisRevocations, sessionInfo, signSession } from "./server/session.js";
+export type { RevocationStore, SessionInfo, SessionSecret, SignSessionOptions } from "./server/session.js";
 export { redisThrottleStore } from "./server/auth.js";
 export type { RedisThrottleLike, ThrottleStore } from "./server/auth.js";
 export { DEFAULT_WRITES_PER_MINUTE } from "./server/router.js";

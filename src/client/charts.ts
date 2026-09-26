@@ -15,13 +15,15 @@
  *
  * A chart over time is also a focusable group: arrow keys step a cursor through the samples and a
  * polite live region reads out each series at that moment, so the numbers behind the line can be
- * explored without a pointer and without opening the table.
+ * explored without a pointer and without opening the table. A pointer moves the same cursor and
+ * shows the same numbers in a tip beside it, without the live region, which would otherwise talk
+ * over every movement of the mouse. The legend's entries hide and show their series.
  */
 import type { ChartSchema, JsonValue, Sample, ValueSchema } from "../types.js";
 import { toCsv } from "./csv.js";
 import { binCount, histogram, lttb, stack } from "./downsample.js";
 import { clear, el, svgEl, uid } from "./dom.js";
-import { type FormatSpec, formatAgo, formatNumber, numericEntries } from "./format.js";
+import { type FormatSpec, formatAgo, formatDuration, formatNumber, numericEntries } from "./format.js";
 import { areaPath, BOX, type Extent, extentOf, linePath, niceTicks, project, scale } from "./geometry.js";
 import type { Translate } from "./i18n.js";
 import { type Store, serverTime } from "./store.js";
@@ -37,26 +39,16 @@ const TABLE_ROWS = 200;
 const KEY_ROWS = 50;
 /** Points a line keeps after downsampling: about two per pixel of a wide card. */
 const DRAWN_POINTS = 600;
-const WINDOWS: Array<[string, number]> = [
-  ["All", 0],
-  ["1 min", 60_000],
-  ["5 min", 300_000],
-  ["15 min", 900_000],
-  ["1 h", 3_600_000],
-];
+/** Recent windows offered over time; 0 is everything held. */
+const WINDOWS = [0, 60_000, 300_000, 900_000, 3_600_000];
 
 export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, ValueSchema>, t: Translate): ChartView {
-  const spec: FormatSpec = { format: schema.format, unit: schema.unit };
+  const spec: FormatSpec = { format: schema.format, unit: schema.unit, locale: t.locale };
   const figure = el("figure", "apb-chart");
-  const titleId = uid("chart-title");
   const summaryId = uid("chart-summary");
-  if (schema.placement === "group") {
-    const caption = el("figcaption", "apb-chart-title", schema.title);
-    caption.id = titleId;
-    figure.append(caption);
-    figure.setAttribute("aria-labelledby", titleId);
-    if (schema.description !== undefined) figure.append(el("p", "apb-description", schema.description));
-  } else figure.setAttribute("aria-label", schema.title);
+  // The card around it carries the name and the description, where every other card carries them:
+  // the figure says the same to a screen reader, and takes no line of its own for it.
+  figure.setAttribute("aria-label", schema.title);
   figure.setAttribute("aria-describedby", summaryId);
 
   const overTime = schema.over === "time" && schema.kind !== "gauge";
@@ -82,9 +74,9 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
     toolbar.append(pause);
     if (overTime) {
       const range = el("select", "apb-tool");
-      range.setAttribute("aria-label", `${schema.title}: time range`);
-      for (const [label, ms] of WINDOWS) {
-        const option = el("option", null, label);
+      range.setAttribute("aria-label", t("timeRange", { label: schema.title }));
+      for (const ms of WINDOWS) {
+        const option = el("option", null, ms === 0 ? t("allTime") : formatDuration(ms, t.locale));
         option.value = String(ms);
         range.append(option);
       }
@@ -113,7 +105,7 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
   }
   figure.append(toolbar);
 
-  const body = el("div");
+  const body = el("div", "apb-chart-body");
   const empty = el("p", "apb-empty");
   const legend = el("ul", "apb-legend");
   const summary = el("p", "apb-sr");
@@ -124,8 +116,13 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
   figure.append(body, readout, empty, legend, summary);
   /** The sample time the keyboard cursor is on, and what the last drawing had to step through. */
   let cursor: number | undefined;
+  /** The cursor follows the pointer rather than the keyboard: drawn with a tip, not read out. */
+  let pointing = false;
+  /** Series hidden from the legend, by value id: left out of the plot and its extent, still listed. */
+  const hidden = new Set<string>();
   let moments: Array<{ time: number; cells: Array<Sample | undefined> }> = [];
   let momentLabels: string[] = [];
+  let momentSlots: number[] = [];
   if (overTime || against) {
     // The body outlives every redraw, so focus stays put while the plot inside it is replaced.
     body.className = "apb-chart-body";
@@ -141,24 +138,53 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
       else if (event.key === "Home") index = 0;
       else if (event.key === "End") index = moments.length - 1;
       else if (event.key === "Escape" && cursor !== undefined) {
-        cursor = undefined;
-        readout.hidden = true;
-        if (last !== undefined) draw(last);
+        leave();
         return;
       } else return;
       event.preventDefault();
-      const moment = moments[index] as (typeof moments)[number];
-      cursor = moment.time;
-      readout.hidden = false;
-      const when = new Date(moment.time).toLocaleTimeString();
-      readout.textContent = moment.cells
-        .map((cell, series) => (cell === undefined ? undefined : t("chartPoint", { label: momentLabels[series] ?? "", value: formatNumber(cell[1], spec), time: when })))
-        .filter((text): text is string => text !== undefined)
-        .join("; ");
-      if (last !== undefined) draw(last);
+      point(index, false);
     });
   }
-  const table = schema.kind === "gauge" ? undefined : buildTableView(figure, t);
+
+  /** Puts the cursor on a moment and says what is there: aloud for the keyboard, in a tip for a pointer. */
+  function point(index: number, byPointer: boolean): void {
+    const moment = moments[index];
+    if (moment === undefined || (byPointer && pointing && cursor === moment.time)) return;
+    cursor = moment.time;
+    pointing = byPointer;
+    readout.setAttribute("aria-live", byPointer ? "off" : "polite");
+    readout.hidden = byPointer;
+    const when = new Date(moment.time).toLocaleTimeString(t.locale);
+    readout.textContent = moment.cells
+      .map((cell, series) => (cell === undefined ? undefined : t("chartPoint", { label: momentLabels[series] ?? "", value: formatNumber(cell[1], spec), time: when })))
+      .filter((text): text is string => text !== undefined)
+      .join("; ");
+    if (last !== undefined) draw(last);
+  }
+
+  // The body outlives every redraw, so it is what notices the pointer going: a plot replaced under
+  // the pointer never hears it leave in every engine.
+  let hoverFrame = 0;
+  body.addEventListener("pointerleave", () => {
+    cancelAnimationFrame(hoverFrame);
+    if (pointing) leave();
+  });
+  body.addEventListener("pointermove", (event) => {
+    if (pointing && !(event.target instanceof Element && event.target.closest(".apb-plot") !== null)) {
+      cancelAnimationFrame(hoverFrame);
+      leave();
+    }
+  });
+
+  function leave(): void {
+    if (cursor === undefined) return;
+    cursor = undefined;
+    pointing = false;
+    readout.hidden = true;
+    if (last !== undefined) draw(last);
+  }
+  // A gauge has one number and a heatmap is already a table of them: neither has a table to show.
+  const table = schema.kind === "gauge" || schema.kind === "heatmap" ? undefined : buildTableView(figure, t);
 
   function draw(store: Store): void {
     last = store;
@@ -189,7 +215,7 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
       return x >= from && x <= to;
     };
     // A value sampled on change holds between samples, so the line is carried to now at its last reading.
-    const extended = series.map(({ entry, samples }) => {
+    const listed = series.map(({ entry, samples }) => {
       let kept = samples.filter(inRange);
       if (!against && kept.length > 0 && zoom === undefined && paused === undefined) {
         const lastSample = kept[kept.length - 1] as Sample;
@@ -197,8 +223,10 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
       }
       return { entry, samples: kept };
     });
+    const extended = listed.filter(({ entry }) => !hidden.has(entry.value));
     moments = byTime(extended.map(({ samples }) => samples)).reverse();
     momentLabels = extended.map(({ entry }) => entry.label);
+    momentSlots = extended.map(({ entry }) => entry.slot);
     const lineValues = (schema.lines ?? []).map((line) => ({ label: line.label, value: line.value ?? numberOf(store.values.get(line.from ?? "")?.value) }));
     const stacked = schema.stacked === true ? stack(extended.map(({ samples }) => samples.map((sample) => [sample[0], sample[1]] as [number, number]))) : undefined;
     const ys = stacked === undefined ? extended.flatMap(({ samples }) => samples.map((sample) => sample[1])) : stacked.layers.flatMap((layer) => layer.map(([, y]) => y));
@@ -238,7 +266,19 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
         });
       } else {
         if (schema.kind === "area") {
-          if (below === undefined) group.append(svgEl("path", { class: "apb-area", d: areaPath(points, false, scale(Math.max(y.min, 0), y)) }));
+          if (below === undefined) {
+            // Fading towards the axis: a gradient inside the series' group, so its stops take the
+            // group's colour. The fill goes through the CSSOM because the stylesheet's flat tint
+            // would outrank a presentation attribute.
+            const id = uid("fade");
+            const gradient = svgEl("linearGradient", { id, x1: 0, x2: 0, y1: 0, y2: 1 });
+            gradient.append(svgEl("stop", { class: "apb-fade-top", offset: 0 }), svgEl("stop", { class: "apb-fade-bottom", offset: 1 }));
+            const defs = svgEl("defs");
+            defs.append(gradient);
+            const area = svgEl("path", { class: "apb-area apb-area-fade", d: areaPath(points, false, scale(Math.max(y.min, 0), y)) });
+            area.style.fill = `url(#${id})`;
+            group.append(defs, area);
+          }
           else {
             const bottom = below.map(([time, value]) => [scale(time, x), scale(value, y)] as [number, number]).reverse();
             const d = `${linePath(points)} ${bottom.map(([bx, by]) => `L${Math.round(bx * 10) / 10} ${Math.round((BOX - by) * 10) / 10}`).join(" ")} Z`;
@@ -246,6 +286,9 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
           }
         }
         group.append(svgEl("path", { class: "apb-line", d: linePath(points, schema.kind === "step") }));
+        // Where the line ends, marked: on a busy chart the eye looks for now first.
+        const end = points[points.length - 1];
+        if (end !== undefined) group.append(svgEl("path", { class: "apb-dot apb-dot-last", d: `M${Math.round(end[0])} ${Math.round(BOX - end[1])} l0 0` }));
       }
       svg.append(group);
     });
@@ -267,45 +310,109 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
       svg.append(line);
     }
     if (cursor !== undefined) {
-      const moment = moments.find((entry) => entry.time === cursor);
+      // A value that holds between samples is carried to now, and now moves with every drawing: the
+      // moment the cursor was put on may be gone by the next one, so the nearest stands in for it.
+      const at = cursor;
+      const moment = moments.find((entry) => entry.time === at) ?? moments.reduce<(typeof moments)[number] | undefined>((best, entry) => (best === undefined || Math.abs(entry.time - at) < Math.abs(best.time - at) ? entry : best), undefined);
       const cx = against ? moment?.cells.find((cell) => cell !== undefined)?.[2] : cursor;
       if (cx !== undefined && cx >= x.min && cx <= x.max) {
         const position = scale(cx, x);
         svg.append(svgEl("line", { class: "apb-cursor", x1: position, x2: position, y1: 0, y2: BOX }));
+        if (pointing && moment !== undefined) plot.append(tip(moment, position));
       }
     }
     plot.append(svg);
-    if (!sparkline) attachZoom(plot, x);
+    if (!sparkline) {
+      attachZoom(plot, x);
+      attachHover(plot, x);
+    }
     body.append(plot);
     if (!sparkline) {
       const axis = el("div", "apb-axis");
       if (against && typeof schema.over === "object") {
-        const overSpec = specOf(values.get(schema.over.value));
+        const overSpec = specOf(values.get(schema.over.value), t.locale);
         axis.append(el("span", null, formatNumber(x.min, overSpec)), el("span", null, schema.over.label), el("span", null, formatNumber(x.max, overSpec)));
-      } else axis.append(el("span", null, formatAgo(x.min, now)), el("span", null, zoom === undefined && paused === undefined ? "now" : formatAgo(x.max, now)));
+      } else axis.append(el("span", null, formatAgo(x.min, now, t.locale)), el("span", null, zoom === undefined && paused === undefined ? t("now") : formatAgo(x.max, now, t.locale)));
       body.append(axis);
       if (marks.length > 0) body.append(el("p", "apb-hint", marks.map((mark) => mark.text).join(" · ")));
     }
 
     const sentences: string[] = [];
-    for (const { entry, samples } of extended) {
+    for (const { entry, samples } of listed) {
       const latest = samples[samples.length - 1];
       const item = el("li", `apb-slot-${entry.slot}`);
-      item.append(el("span", "apb-swatch"), document.createTextNode(entry.label));
-      if (latest !== undefined) item.append(el("span", "apb-legend-value", formatNumber(latest[1], spec)));
+      const toggle = el("button", "apb-legend-item");
+      toggle.type = "button";
+      toggle.setAttribute("aria-pressed", String(!hidden.has(entry.value)));
+      toggle.title = t("chartToggle");
+      toggle.append(el("span", "apb-swatch"), document.createTextNode(entry.label));
+      if (latest !== undefined) toggle.append(el("span", "apb-legend-value", formatNumber(latest[1], spec)));
+      toggle.addEventListener("click", () => {
+        if (hidden.has(entry.value)) hidden.delete(entry.value);
+        else hidden.add(entry.value);
+        if (last !== undefined) draw(last);
+        legend.querySelector<HTMLButtonElement>(`.apb-slot-${entry.slot} .apb-legend-item`)?.focus();
+      });
+      item.append(toggle);
       legend.append(item);
       if (samples.length > 0) {
         const readings = samples.map((sample) => sample[1]);
-        sentences.push(`${entry.label} ranges from ${formatNumber(Math.min(...readings), spec)} to ${formatNumber(Math.max(...readings), spec)}${latest === undefined ? "" : `, latest ${formatNumber(latest[1], spec)}`}`);
+        const range = t("chartRanges", { label: entry.label, min: formatNumber(Math.min(...readings), spec), max: formatNumber(Math.max(...readings), spec) });
+        sentences.push(latest === undefined ? range : t("chartLatest", { text: range, value: formatNumber(latest[1], spec) }));
       }
     }
     // One series needs no legend beside a chart titled with its name; the table still names it.
     legend.hidden = series.length === 1 && schema.placement === "alone";
-    summary.textContent = `${describeKind(schema)} of ${series.map(({ entry }) => entry.label).join(", ")}${against && typeof schema.over === "object" ? ` against ${schema.over.label}` : ""}. ${sentences.join(". ")}.`;
-    const head = ["Time", ...(against && typeof schema.over === "object" ? [schema.over.label] : []), ...series.map(({ entry }) => entry.label)];
-    const samplesOnly = extended.map(({ samples }) => samples);
-    csv = [head, ...rawRows(samplesOnly, against)];
-    table?.fill(head, tableRows(samplesOnly, against, spec, specOf(typeof schema.over === "object" ? values.get(schema.over.value) : undefined)));
+    const described = t("chartOf", { kind: describeKind(schema, t), labels: series.map(({ entry }) => entry.label).join(", ") });
+    summary.textContent = `${against && typeof schema.over === "object" ? t("chartAgainst", { text: described, label: schema.over.label }) : described}. ${sentences.join(". ")}.`;
+    // The CSV keeps English column names, for the scripts that read it; the table speaks the page's language.
+    const csvHead = ["Time", ...(against && typeof schema.over === "object" ? [schema.over.label] : []), ...series.map(({ entry }) => entry.label)];
+    const head = [t("colTime"), ...(against && typeof schema.over === "object" ? [schema.over.label] : []), ...series.map(({ entry }) => entry.label)];
+    const samplesOnly = listed.map(({ samples }) => samples);
+    csv = [csvHead, ...rawRows(samplesOnly, against)];
+    table?.fill(head, tableRows(samplesOnly, against, spec, specOf(typeof schema.over === "object" ? values.get(schema.over.value) : undefined, t.locale), t.locale));
+  }
+
+  /** The numbers at the cursor, beside it, for a pointer: the readout says the same to a screen reader. */
+  function tip(moment: (typeof moments)[number], position: number): HTMLElement {
+    const box = el("div", "apb-tip");
+    box.setAttribute("aria-hidden", "true");
+    box.dataset.side = position > BOX * 0.6 ? "left" : "right";
+    box.style.left = `${(position / BOX) * 100}%`;
+    box.append(el("div", "apb-tip-time", new Date(moment.time).toLocaleTimeString(t.locale)));
+    moment.cells.forEach((cell, index) => {
+      if (cell === undefined) return;
+      const row = el("div", `apb-tip-row apb-slot-${momentSlots[index] ?? 1}`);
+      row.append(el("span", "apb-swatch"), el("span", "apb-tip-label", momentLabels[index] ?? ""), el("span", "apb-tip-value", formatNumber(cell[1], spec)));
+      box.append(row);
+    });
+    return box;
+  }
+
+  /** Moving over the plot puts the cursor on the nearest moment; leaving it takes the cursor away. */
+  function attachHover(plot: HTMLElement, x: Extent): void {
+    plot.addEventListener("pointermove", (event) => {
+      // Touch scrolls the page and drags zoom; the tip is for a mouse or a pen.
+      if (event.pointerType === "touch" || event.buttons !== 0) return;
+      const clientX = event.clientX;
+      cancelAnimationFrame(hoverFrame);
+      hoverFrame = requestAnimationFrame(() => {
+        const box = plot.getBoundingClientRect();
+        const target = x.min + ((clientX - box.left) / Math.max(1, box.width)) * (x.max - x.min);
+        let best = -1;
+        let distance = Number.POSITIVE_INFINITY;
+        moments.forEach((moment, index) => {
+          const at = against ? moment.cells.find((cell) => cell !== undefined)?.[2] : moment.time;
+          if (at === undefined) return;
+          const gap = Math.abs(at - target);
+          if (gap < distance) {
+            distance = gap;
+            best = index;
+          }
+        });
+        if (best !== -1) point(best, true);
+      });
+    });
   }
 
   /** Drag across the plot to zoom into that stretch; the reset button shows everything again. */
@@ -362,7 +469,7 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
     const scaleRow = el("div", "apb-gauge-scale");
     scaleRow.append(el("span", null, formatNumber(min, spec)), el("span", null, `${Math.round(share * 100)}%`), el("span", null, formatNumber(max, spec)));
     body.append(track, scaleRow);
-    summary.textContent = current === undefined ? `${entry.label}: no reading.` : `${entry.label} is ${formatNumber(current, spec)} of ${formatNumber(max, spec)}, ${Math.round(share * 100)} percent.`;
+    summary.textContent = current === undefined ? t("gaugeNone", { label: entry.label }) : t("gaugeReading", { label: entry.label, value: formatNumber(current, spec), max: formatNumber(max, spec), percent: Math.round(share * 100) });
   }
 
   function drawBars(rows: Array<{ label: string; value: number; slot: number }>, max: number, valueSpec: FormatSpec): void {
@@ -377,7 +484,7 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
       line.append(el("span", "apb-key-label", row.label), track, el("span", "apb-key-value", formatNumber(row.value, valueSpec)));
       keys.append(line);
     }
-    if (rows.length > KEY_ROWS) keys.append(el("p", "apb-empty", `${rows.length - KEY_ROWS} more not drawn; the table lists them all.`));
+    if (rows.length > KEY_ROWS) keys.append(el("p", "apb-empty", t("moreNotDrawn", { count: rows.length - KEY_ROWS })));
     body.append(keys);
   }
 
@@ -387,13 +494,13 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
     for (const entry of schema.series) {
       const entries = numericEntries(store.values.get(entry.value)?.value ?? null);
       for (const [key, value] of entries) rows.push({ label: schema.series.length > 1 ? `${entry.label}: ${key}` : key, value, slot: entry.slot });
-      sentences.push(`${entry.label}: ${entries.length} ${entries.length === 1 ? "entry" : "entries"}`);
-      if (entries.length === 0) empty.textContent = `${values.get(entry.value)?.label ?? entry.value} has no numeric entries to draw yet.`;
+      sentences.push(t("entriesCount", { label: entry.label, count: entries.length }));
+      if (entries.length === 0) empty.textContent = t("keysEmpty", { label: values.get(entry.value)?.label ?? entry.value });
     }
     drawBars(rows, Math.max(schema.max ?? 0, ...rows.map((row) => Math.abs(row.value))), spec);
-    summary.textContent = `Bar chart. ${sentences.join(". ")}.`;
+    summary.textContent = t("barSummary", { text: sentences.join(". ") });
     csv = [["Key", "Value"], ...rows.map((row) => [row.label, String(row.value)])];
-    table?.fill(["Key", "Value"], rows.map((row) => [row.label, formatNumber(row.value, spec)]));
+    table?.fill([t("colKey"), t("colValue")], rows.map((row) => [row.label, formatNumber(row.value, spec)]));
   }
 
   function drawHistogram(store: Store): void {
@@ -402,17 +509,17 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
     const raw = store.values.get(entry.value)?.value ?? null;
     const observations = Array.isArray(raw) ? raw.filter((value): value is number => typeof value === "number") : numericEntries(raw).map(([, value]) => value);
     if (observations.length === 0) {
-      empty.textContent = `${entry.label} has no numbers to bin yet.`;
+      empty.textContent = t("histogramEmpty", { label: entry.label });
       summary.textContent = empty.textContent;
       return;
     }
     const bins = histogram(observations, schema.bins ?? binCount(observations.length));
     const rows = bins.map((bin) => ({ label: `${formatNumber(bin.from, spec)} – ${formatNumber(bin.to, spec)}`, value: bin.count, slot: entry.slot }));
     const max = Math.max(...rows.map((row) => row.value));
-    drawBars(rows, max, { format: "integer" });
-    summary.textContent = `Histogram of ${observations.length} values of ${entry.label} in ${bins.length} bins; the fullest holds ${max}.`;
+    drawBars(rows, max, { format: "integer", locale: t.locale });
+    summary.textContent = t("histogramSummary", { count: observations.length, label: entry.label, bins: bins.length, max });
     csv = [["From", "To", "Count"], ...bins.map((bin) => [String(bin.from), String(bin.to), String(bin.count)])];
-    table?.fill(["Range", "Count"], rows.map((row) => [row.label, String(row.value)]));
+    table?.fill([t("colRange"), t("colCount")], rows.map((row) => [row.label, String(row.value)]));
   }
 
   function drawHeatmap(store: Store): void {
@@ -460,7 +567,7 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
     grid.append(thead, tbody);
     wrap.append(grid);
     body.append(wrap);
-    summary.textContent = `Heatmap of ${entry.label}: ${rowKeys.length} rows by ${columnKeys.length} columns; the highest cell is ${formatNumber(max, spec)}.`;
+    summary.textContent = t("heatmapSummary", { label: entry.label, rows: rowKeys.length, columns: columnKeys.length, max: formatNumber(max, spec) });
     csv = [["", ...columnKeys], ...rowKeys.map((row) => [row, ...columnKeys.map((column) => String(cell(row, column)))])];
   }
 
@@ -471,21 +578,21 @@ function numberOf(value: JsonValue | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function specOf(schema: ValueSchema | undefined): FormatSpec {
-  return schema === undefined ? {} : { format: schema.format, unit: schema.unit, decimals: schema.decimals, kind: schema.kind };
+function specOf(schema: ValueSchema | undefined, locale: string | undefined): FormatSpec {
+  return schema === undefined ? { locale } : { format: schema.format, unit: schema.unit, decimals: schema.decimals, kind: schema.kind, locale };
 }
 
-function describeKind(schema: ChartSchema): string {
-  if (typeof schema.over === "object") return "Scatter chart";
-  const stacked = schema.stacked === true ? "Stacked " : "";
-  return `${stacked}${{ line: "line chart", area: "area chart", step: "step chart", bar: "bar chart", sparkline: "sparkline", gauge: "gauge", histogram: "histogram", heatmap: "heatmap" }[schema.kind].replace(/^./, (letter) => (stacked === "" ? letter.toUpperCase() : letter))}`;
+function describeKind(schema: ChartSchema, t: Translate): string {
+  if (typeof schema.over === "object") return t("kind_scatter");
+  const kind = t(`kind_${schema.kind}` as Parameters<Translate>[0]);
+  return schema.stacked === true ? t("kindStacked", { kind }) : kind;
 }
 
 /** Rows newest first, one per sample time, a column per series. */
-function tableRows(series: ReadonlyArray<readonly Sample[]>, against: boolean, spec: FormatSpec, overSpec: FormatSpec): string[][] {
+function tableRows(series: ReadonlyArray<readonly Sample[]>, against: boolean, spec: FormatSpec, overSpec: FormatSpec, locale: string | undefined): string[][] {
   return byTime(series).map(({ time, cells }) => {
     const x = cells.find((cell) => cell !== undefined)?.[2];
-    return [new Date(time).toLocaleTimeString(), ...(against ? [x === undefined ? "—" : formatNumber(x, overSpec)] : []), ...cells.map((cell) => (cell === undefined ? "—" : formatNumber(cell[1], spec)))];
+    return [new Date(time).toLocaleTimeString(locale), ...(against ? [x === undefined ? "—" : formatNumber(x, overSpec)] : []), ...cells.map((cell) => (cell === undefined ? "—" : formatNumber(cell[1], spec)))];
   });
 }
 
@@ -521,13 +628,24 @@ function exportCsv(title: string, rows: string[][]): void {
 
 function buildTableView(figure: HTMLElement, t: Translate): { fill(head: string[], rows: string[][]): void } {
   const details = el("details", "apb-table-view");
-  details.append(el("summary", null, t("showTable")));
+  // The words say what pressing it does now: while the numbers are shown, that is putting them away.
+  const summary = el("summary", null, t("showTable"));
+  details.append(summary);
   const wrap = el("div", "apb-table-wrap");
   details.append(wrap);
   figure.append(details);
   let pending: { head: string[]; rows: string[][] } | undefined;
   const render = (): void => {
-    if (pending === undefined || !details.open) return;
+    if (!details.open) return;
+    // Opened before the chart has anything to say: the fold says so rather than standing empty.
+    if (pending === undefined) {
+      clear(wrap);
+      wrap.append(el("p", "apb-empty", t("noSamples")));
+      return;
+    }
+    // Drawn again on every update: where somebody has scrolled to stays where they left it,
+    // whether the numbers scroll inside their box or the fold around them does.
+    const scrolled = { wrap: wrap.scrollTop, view: details.scrollTop };
     clear(wrap);
     const table = el("table", "apb-table");
     const head = el("tr");
@@ -546,10 +664,15 @@ function buildTableView(figure: HTMLElement, t: Translate): { fill(head: string[
     }
     table.append(thead, tbody);
     wrap.append(table);
-    if (pending.rows.length > TABLE_ROWS) wrap.append(el("p", "apb-empty", `Showing the newest ${TABLE_ROWS} of ${pending.rows.length} rows; the CSV has them all.`));
+    if (pending.rows.length > TABLE_ROWS) wrap.append(el("p", "apb-empty", t("tableNewest", { shown: TABLE_ROWS, total: pending.rows.length })));
+    wrap.scrollTop = scrolled.wrap;
+    details.scrollTop = scrolled.view;
   };
   // Built only while open: a closed table view costs nothing per poll.
-  details.addEventListener("toggle", render);
+  details.addEventListener("toggle", () => {
+    summary.textContent = details.open ? t("hideTable") : t("showTable");
+    render();
+  });
   return {
     fill(head, rows) {
       pending = { head, rows };

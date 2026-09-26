@@ -41,7 +41,10 @@ describe("the live stream", () => {
     const request = { method: "GET", url: "/api/stream", headers: { host: "127.0.0.1" }, address: "127.0.0.1", body: async () => "" };
     const first = await router.route(request);
     const stop = first.stream?.start({ send: () => undefined, ready: () => true, close: () => undefined });
-    expect((await router.route(request)).status).toBe(503);
+    const turned = await router.route(request);
+    // Refused like every other refusal: the sentence, and the key a page says it in its own language with.
+    expect([turned.status, JSON.parse(turned.body)]).toEqual([503, { error: "this panel already streams to as many viewers as it allows (1); this page polls instead", key: "refuseTooManyViewers", params: { max: 1 }, code: "busy" }]);
+    expect(turned.headers["retry-after"]).toBe("30");
     stop?.();
     expect((await call(routerFor(panel, { stream: false }), "GET", "/api/stream")).status).toBe(404);
     expect((await call(routerFor(panel), "GET", "/api/schema")).json.schema.stream).toBe(true);
@@ -236,7 +239,9 @@ describe("the command line, against refusals and shapes", () => {
     try {
       expect(await main(["apply", server.url, "on"], io)).toBe(0);
       expect(flag.value).toBe(true);
-      expect(await main(["set", server.url, "guarded", "5"], io)).toBe(0);
+      expect(await main(["set", server.url, "guarded", "5"], io)).toBe(1);
+      expect(err.at(-1)).toMatch(/needs a reason/);
+      expect(await main(["set", server.url, "guarded", "5", "--reason", "load"], io)).toBe(0);
       expect(err.at(-1)).toMatch(/proposed/);
       expect(await main(["get", server.url, "key"], io)).toBe(0);
       expect(out.at(-1)).toBe("(hidden)");
@@ -313,5 +318,29 @@ describe("a remote panel's other paths", () => {
     await response.done;
     expect(response.statusCode).toBe(502);
     expect(() => remotePanelHandler({ upstream: "nope", token: TOKEN, auth: { check: () => "a" } })).toThrow(/upstream/);
+  });
+});
+
+describe("stream frames shared between viewers", () => {
+  it("computes one state for many viewers at one scope and position, and one per distinct view", async () => {
+    const { StreamHub, scopeKey } = await import("../src/server/stream.js");
+    const { panel } = panelAt();
+    panel.viewable(1, { label: "A", group: "One" });
+    panel.viewable(2, { label: "B", group: "Two" });
+    let computed = 0;
+    const original = panel.state.bind(panel);
+    panel.state = ((...args: Parameters<typeof panel.state>) => {
+      computed += 1;
+      return original(...args);
+    }) as typeof panel.state;
+    const hub = new StreamHub(panel, {}, "test");
+    const everything = { groups: undefined, edit: false, actions: false, restrictions: [] };
+    const frames = Array.from({ length: 20 }, () => hub.frame({ ...everything }, 0, 0, 0));
+    expect(computed).toBe(1);
+    expect(new Set(frames.map((frame) => frame.text)).size).toBe(1);
+    hub.frame({ ...everything, groups: new Set(["One"]) }, 0, 0, 0);
+    hub.frame({ ...everything }, 1, 0, 0);
+    expect(computed).toBe(3);
+    expect(scopeKey({ ...everything, groups: new Set(["b", "a"]) })).toBe(scopeKey({ ...everything, groups: new Set(["a", "b"]) }));
   });
 });

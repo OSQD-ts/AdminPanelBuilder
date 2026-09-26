@@ -30,11 +30,11 @@ describe("every call of the typed client", () => {
       expect(await ada.runRowAction("rows", "drop", "a")).toBe("dropped a");
       await ada.applyProfile("on");
       expect(flag.value).toBe(true);
-      const proposed = await ada.set("guarded", 2);
+      const proposed = await ada.set("guarded", 2, { reason: "a test" });
       const pendingId = "pending" in proposed ? proposed.pending.id : "";
       await sam.approve(pendingId);
       expect(panel.get("guarded")?.value).toBe(2);
-      const again = await ada.set("guarded", 3);
+      const again = await ada.set("guarded", 3, { reason: "a test" });
       await sam.reject("pending" in again ? again.pending.id : "");
       await ada.set("flag", false);
       const last = (await ada.changes()).at(-1);
@@ -115,8 +115,8 @@ describe("a narrowed remote panel's writes", () => {
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const post = (path: string, body: object = {}, user = "sam") => fetch(`${url}${path}`, { method: "POST", headers: { "content-type": "application/json", "x-user": user }, body: JSON.stringify(body) });
     try {
-      const mail = panel.edit("rate", 2, "ops", all);
-      const pay = panel.edit("pay", 2, "ops", all);
+      const mail = panel.edit("rate", 2, "ops", all, { reason: "a test" });
+      const pay = panel.edit("pay", 2, "ops", all, { reason: "a test" });
       const mailId = "pending" in mail ? mail.pending.id : "";
       const payId = "pending" in pay ? pay.pending.id : "";
       expect((await post(`/api/pending/${payId}/approve`)).status).toBe(404);

@@ -10,7 +10,15 @@
  * `PanelApiError` carrying the status and the panel's sentence. Fetch only, so it runs anywhere
  * `fetch` does.
  */
-import type { ChangeRecord, JsonValue, Notice, PanelSchema, PanelState, PendingChange, SettingDiff, TableRowsAnswer, WireValue } from "./types.js";
+import type { ChangeRecord, JsonValue, Notice, PanelLayout, PanelSchema, PanelState, PendingChange, RepeatRuleShape, SettingDiff, TableRowsAnswer, WireValue } from "./types.js";
+
+/** How a change is made: for a while, at a time, by a rule, and why. */
+export interface ChangeRequest {
+  revertAfterMs?: number | undefined;
+  at?: number | string | undefined;
+  repeat?: RepeatRuleShape | undefined;
+  reason?: string | undefined;
+}
 
 export interface PanelClientOptions {
   /** The panel's URL, base path included: `https://ops.example/admin`. */
@@ -47,16 +55,20 @@ export interface PanelClient {
   openApi(): Promise<Record<string, unknown>>;
   table(id: string, query?: { offset?: number; limit?: number; sort?: string; dir?: "asc" | "desc"; q?: string }): Promise<TableRowsAnswer>;
   /** Changes a value. `at` schedules it; `revertAfterMs` makes it temporary. A value that needs approval answers `{ pending }`. */
-  set(id: string, value: unknown, options?: { revertAfterMs?: number | undefined; at?: number | string | undefined }): Promise<SetAnswer>;
+  set(id: string, value: unknown, options?: ChangeRequest): Promise<SetAnswer>;
   cancelScheduled(id: string): Promise<WireValue>;
-  run(action: string, input?: Record<string, unknown>): Promise<string>;
+  /** Runs an action; one declared with approval answers `{ pending }` instead of a message. */
+  run(action: string, input?: Record<string, unknown>, options?: { reason?: string | undefined }): Promise<string>;
   runRowAction(table: string, action: string, row: string): Promise<string>;
-  applyProfile(id: string): Promise<void>;
-  approve(pendingId: string): Promise<void>;
-  reject(pendingId: string): Promise<void>;
-  undo(changeId: number): Promise<void>;
+  applyProfile(id: string, options?: ChangeRequest): Promise<SetAnswer>;
+  /** Approves a proposal; for an action, resolves to what it answered. */
+  approve(pendingId: string): Promise<string | undefined>;
+  reject(pendingId: string, options?: { reason?: string | undefined }): Promise<void>;
+  undo(changeId: number, options?: { reason?: string | undefined }): Promise<void>;
   diffSettings(settings: Record<string, unknown>): Promise<{ diff: SettingDiff[]; unknown: string[] }>;
-  importSettings(settings: Record<string, unknown>): Promise<number>;
+  importSettings(settings: Record<string, unknown>, options?: { reason?: string | undefined }): Promise<number>;
+  /** Saves the layout every viewer gets (groups the caller may not edit keep theirs); null goes back to the one in code. */
+  saveLayout(layout: PanelLayout | null, options?: { reason?: string | undefined }): Promise<PanelLayout | null>;
   /**
    * Calls `onState` with every change, polling `/api/state` from where the last answer left off.
    * Stops when `signal` aborts; rejects on the first refusal (a 401, a 403), retries a panel that
@@ -113,29 +125,24 @@ export function panelClient(options: PanelClientOptions): PanelClient {
       const search = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));
       return (await request<{ table: TableRowsAnswer }>(`/api/tables/${segment(id)}?${search}`)).table;
     },
-    set: (id, value, extra = {}) => {
-      const body: Record<string, unknown> = { value };
-      if (extra.revertAfterMs !== undefined) body.revertAfterMs = extra.revertAfterMs;
-      if (extra.at !== undefined) body.at = extra.at;
-      return request<SetAnswer>(`/api/values/${segment(id)}`, body);
-    },
+    set: (id, value, extra = {}) => request<SetAnswer>(`/api/values/${segment(id)}`, { value, ...changeBody(extra) }),
     cancelScheduled: async (id) => (await request<{ value: WireValue }>(`/api/schedules/${segment(id)}/cancel`, {})).value,
-    run: async (action, input) => (await request<{ result: { message: string } }>(`/api/actions/${segment(action)}`, input === undefined ? {} : { input })).result.message,
+    run: async (action, input, extra = {}) => {
+      const answer = await request<{ result?: { message: string }; pending?: PendingChange }>(`/api/actions/${segment(action)}`, { ...(input === undefined ? {} : { input }), ...changeBody(extra) });
+      return answer.result?.message ?? "Proposed; it runs once another operator approves it.";
+    },
     runRowAction: async (table, action, row) => (await request<{ result: { message: string } }>(`/api/tables/${segment(table)}/actions/${segment(action)}`, { row })).result.message,
-    applyProfile: async (id) => {
-      await request(`/api/profiles/${segment(id)}`, {});
+    applyProfile: (id, extra = {}) => request<SetAnswer>(`/api/profiles/${segment(id)}`, changeBody(extra)),
+    approve: async (id) => (await request<{ result?: { message: string } }>(`/api/pending/${segment(id)}/approve`, {})).result?.message,
+    reject: async (id, extra = {}) => {
+      await request(`/api/pending/${segment(id)}/reject`, changeBody(extra));
     },
-    approve: async (id) => {
-      await request(`/api/pending/${segment(id)}/approve`, {});
-    },
-    reject: async (id) => {
-      await request(`/api/pending/${segment(id)}/reject`, {});
-    },
-    undo: async (id) => {
-      await request(`/api/changes/${id}/undo`, {});
+    undo: async (id, extra = {}) => {
+      await request(`/api/changes/${id}/undo`, changeBody(extra));
     },
     diffSettings: (settings) => request<{ diff: SettingDiff[]; unknown: string[] }>("/api/settings/diff", { settings }),
-    importSettings: async (settings) => (await request<{ changed: number }>("/api/settings/apply", { settings })).changed,
+    importSettings: async (settings, extra = {}) => (await request<{ changed: number }>("/api/settings/apply", { settings, ...changeBody(extra) })).changed,
+    saveLayout: async (layout, extra = {}) => (await request<{ layout: PanelLayout | null }>("/api/layout", { layout, ...changeBody(extra) })).layout,
     watch: async (onState, watchOptions = {}) => {
       const signal = watchOptions.signal;
       let position: { since?: number; after?: number; feed?: number } = {};
@@ -167,4 +174,11 @@ export function panelClient(options: PanelClientOptions): PanelClient {
     },
   };
   return client;
+}
+
+/** Only the fields that are set: an absent option is absent from the body. */
+function changeBody(options: ChangeRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  for (const key of ["revertAfterMs", "at", "repeat", "reason"] as const) if (options[key] !== undefined) body[key] = options[key];
+  return body;
 }

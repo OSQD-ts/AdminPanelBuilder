@@ -8,6 +8,7 @@
  * write — from an operator, from code, from a store at start-up — comes through `checkValue`.
  */
 import { AdminPanelConfigError, ValueError } from "../errors.js";
+import { ENGLISH, format } from "../i18n/messages.js";
 import type { JsonValue, ModifiableOptions, ValueConstraints, ValueKind } from "../types.js";
 
 /**
@@ -109,7 +110,10 @@ export function checkValue(label: string, kind: ValueKind, constraints: ValueCon
       if (constraints.min !== undefined && candidate < constraints.min) throw new ValueError(`${label} must be at least ${constraints.min}`, { key: "refuseAtLeast", params: { label, min: constraints.min } });
       if (constraints.max !== undefined && candidate > constraints.max) throw new ValueError(`${label} must be at most ${constraints.max}`, { key: "refuseAtMost", params: { label, max: constraints.max } });
       if (constraints.step !== undefined && !onStep(candidate, constraints.min ?? 0, constraints.step)) {
-        throw new ValueError(`${label} must be ${constraints.min === undefined ? "a multiple of" : `${constraints.min} plus a multiple of`} ${constraints.step}`);
+        throw new ValueError(
+          `${label} must be ${constraints.min === undefined ? "a multiple of" : `${constraints.min} plus a multiple of`} ${constraints.step}`,
+          constraints.min === undefined ? { key: "refuseStep", params: { label, step: constraints.step } } : { key: "refuseStepFrom", params: { label, min: constraints.min, step: constraints.step } },
+        );
       }
       return;
     }
@@ -129,7 +133,7 @@ export function checkValue(label: string, kind: ValueKind, constraints: ValueCon
     }
     case "json": {
       const encoded = JSON.stringify(toJson(candidate));
-      if (encoded.length > (constraints.maxLength ?? DEFAULT_MAX_LENGTH)) throw new ValueError(`${label} is ${encoded.length} characters of JSON, above its limit of ${constraints.maxLength ?? DEFAULT_MAX_LENGTH}`);
+      if (encoded.length > (constraints.maxLength ?? DEFAULT_MAX_LENGTH)) throw new ValueError(`${label} is ${encoded.length} characters of JSON, above its limit of ${constraints.maxLength ?? DEFAULT_MAX_LENGTH}`, { key: "refuseJsonLong", params: { label, length: encoded.length, limit: constraints.maxLength ?? DEFAULT_MAX_LENGTH } });
       return;
     }
   }
@@ -200,11 +204,12 @@ export function toJson(value: unknown, depth = 0, seen: Set<object> = new Set())
 }
 
 /** The wire half of a value: its JSON, plus a note when the JSON alone would mislead. */
-export function encodeForWire(value: unknown): { value: JsonValue; text?: string } {
+export function encodeForWire(value: unknown): { value: JsonValue; text?: string; textKey?: string; textParams?: Record<string, string | number> } {
   if (typeof value === "number" && !Number.isFinite(value)) return { value: null, text: String(value) };
   const json = toJson(value);
   if (typeof json === "string" ? json.length > MAX_WIRE_BYTES : typeof json === "object" && json !== null && JSON.stringify(json).length > MAX_WIRE_BYTES) {
-    return { value: null, text: `too large to send (over ${MAX_WIRE_BYTES / 1024} KB of JSON)` };
+    const kb = MAX_WIRE_BYTES / 1024;
+    return { value: null, text: format(ENGLISH.valueTooLarge, { kb }), textKey: "valueTooLarge", textParams: { kb } };
   }
   return { value: json };
 }

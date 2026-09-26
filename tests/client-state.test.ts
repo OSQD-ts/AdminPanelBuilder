@@ -29,7 +29,7 @@ describe("the page's store", () => {
     const limit = panel.modifiable(1, { label: "Limit", approval: true });
     const flag = panel.modifiable(false, "Flag");
     panel.profile("On", [[flag, true]]);
-    panel.edit("limit", 2, "ada", { groups: undefined, edit: true, actions: false, restrictions: [] });
+    panel.edit("limit", 2, "ada", { groups: undefined, edit: true, actions: false, restrictions: [] }, { reason: "a test" });
     flag.set(true);
     const store = createStore(panel.schema(), panel.state());
     expect(store.pending.map((change) => change.target)).toEqual(["limit"]);
@@ -54,6 +54,26 @@ describe("per-viewer preferences", () => {
     const again = loadPrefs("apb:test");
     expect([...again.pinned]).toEqual(["value:a"]);
     expect([...again.collapsed]).toEqual(["chart:b"]);
+  });
+
+  it("store only what a viewer chose, and put every choice back", () => {
+    const saved = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => void saved.set(key, value) };
+    const prefs = loadPrefs("apb:test");
+    // Defaults are not written, so a default that changes later reaches a viewer who never chose.
+    prefs.save();
+    expect(JSON.parse(saved.get("apb:test") as string)).toEqual({ pinned: [], collapsed: [] });
+    Object.assign(prefs, { scheme: "dark", language: "de", theme: "carbon", density: "compact", flash: false, motion: false, trends: false, layout: { game: { order: ["value:a"] } } });
+    prefs.pinned.add("value:a");
+    prefs.save();
+    const chosen = loadPrefs("apb:test");
+    expect([chosen.scheme, chosen.language, chosen.theme, chosen.density, chosen.flash, chosen.motion, chosen.trends]).toEqual(["dark", "de", "carbon", "compact", false, false, false]);
+    expect(chosen.layout?.game?.order).toEqual(["value:a"]);
+    // Reset puts the panel's own back, and keeps what is not a setting: pins, folds and the layout.
+    chosen.reset();
+    const after = loadPrefs("apb:test");
+    expect([after.scheme, after.language, after.theme, after.density, after.flash, after.motion, after.trends]).toEqual([undefined, undefined, undefined, undefined, true, true, true]);
+    expect([[...after.pinned], after.layout?.game?.order]).toEqual([["value:a"], ["value:a"]]);
   });
 
   it("work without storage, and ignore what storage holds that is not theirs", () => {

@@ -33,6 +33,7 @@ const COLOR_KEYS: ReadonlyArray<keyof ThemeColors> = [
   "headerInk",
   "grid",
   "shadow",
+  "shadowRaised",
   "chart",
 ];
 
@@ -132,6 +133,26 @@ function isDark(colors: ThemeColors): boolean {
   const value = Number.parseInt(hex[1] as string, 16);
   const luminance = 0.2126 * ((value >> 16) & 255) + 0.7152 * ((value >> 8) & 255) + 0.0722 * (value & 255);
   return luminance < 128;
+}
+
+/**
+ * A theme's tokens under `data-theme="<name>"`, for a page that offers it beside its own: a viewer's
+ * choice then applies by setting one attribute, without a second stylesheet (which the page's CSP
+ * would refuse). Every selector is one step more specific than its counterpart in
+ * `themeStylesheet`, so the chosen theme wins in light, in dark and under the system's setting.
+ * Tokens only: a theme's extra `css` applies where it is the panel's own theme.
+ */
+export function scopedThemeStylesheet(theme: Theme): string {
+  const light = colorDeclarations(theme.light);
+  const dark = colorDeclarations(theme.dark);
+  const shape = shapeDeclarations(theme.shape);
+  const name = `[data-theme="${theme.name}"]`;
+  return [
+    `.apb-root${name}, :host(${name}) { ${shape} ${light} }`,
+    `@media (prefers-color-scheme: dark) { .apb-root${name}:not([data-scheme="light"]), :host(${name}:not([data-scheme="light"])) { ${dark} } }`,
+    `.apb-root${name}[data-scheme="dark"], :host(${name}[data-scheme="dark"]) { ${dark} }`,
+    "",
+  ].join("\n");
 }
 
 /**

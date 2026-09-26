@@ -16,7 +16,7 @@ For a real audit trail, keep them in a [change log and forward them to sinks](au
 
 ## Undo
 
-Every edit that recorded what it replaced has an **Undo** under Activity (and `POST /api/changes/:id/undo`).
+Every edit, profile and import that recorded what it replaced has an **Undo** under Activity (and `POST /api/changes/:id/undo`).
 Undo writes the old value back through the same checks as any edit, attributed to whoever undid it — so
 it can itself be undone, and a value declared with `approval` turns an undo into a proposal. It is
 refused when the value has changed since, because undoing would overwrite the later change, and for a
@@ -41,14 +41,32 @@ and one whose time passed while the process was down is applied on start with a 
 late. A scheduled change to a value declared with `approval` is proposed now and, once approved, waits
 for its time.
 
+## Repeating changes
+
+Choose **Every day** or **Every week** under **Later**, or send `repeat: { every, at, weekday?, timeZone }`
+(`apb … --repeat "daily 02:00" --tz Europe/Warsaw`). The rule runs on the wall clock of its time zone:
+when the clocks go forward past the time, it runs at the end of the gap; when they go back over it, it
+runs once. With a length (*For 1 h*), each run is a timed change. A run missed while the process was down
+runs once on start, not once per missed night. Profiles take the same rules.
+
+## Reasons
+
+Every change can say why: an optional field on the page, `reason` in the API, `--reason` on the command
+line. It is kept on the change record, shown under Activity, and sent to every sink. A value, action or
+profile declared with `reason: "required"` refuses a change without one, and anything needing approval
+always requires one: the second operator decides on it.
+
 ## Approvals
 
 A value declared with `approval: true` changes only when two operators agree. An edit becomes a
 **proposal**, answered 202 with `{ pending }` and shown on the value and under Activity; a different
 operator approves it (`POST /api/pending/:id/approve`) and it is applied, recorded as "ada, approved by
-sam". The proposer cannot approve their own change. Anyone who may edit the value can turn it down. A
-proposal lapses after `APPROVAL_TTL_MS` (an hour), at most `MAX_PENDING` wait at once, and a profile may not
-include an approval value — it would be a way around the second operator.
+sam". The proposer cannot approve their own change: it is the operator that counts, not the route they
+came by, so "ada" and "ada via gateway" are the same person to the rule. Anyone who may edit the value can turn it down, with
+a reason. A proposal lapses after `APPROVAL_TTL_MS` (an hour), at most `MAX_PENDING` wait at once, and a
+profile may not include an approval value — it would be a way around the second operator. Actions and
+profiles take `approval: true` too: an approved action runs with the input it was proposed with. With
+[replicas](replicas.md), a proposal made on one is decided on any, once.
 
 ## Settings as a file
 
@@ -82,7 +100,9 @@ flapping across its threshold is one per cooldown. Every [audit sink](audit.md) 
 
 Something an operator should know that is not an error. A notice has a stable id, so the same condition
 noticed again updates it rather than adding another. They appear under Activity and are emitted as
-`notice` events. Current notices:
+`notice` events. A notice the panel wrote about its own machinery carries the page's message key and
+what fills it beside the English sentence, so the page says it in the viewer's language; an alert's
+sentence does not, because it reads the same here, in the change log and in a webhook. Current notices:
 
 | Notice | Means |
 | --- | --- |

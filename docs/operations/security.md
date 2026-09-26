@@ -33,11 +33,18 @@ internal tool and the operator reading the refusal is usually the one who can fi
 
 | `auth` | Sent as | The operator is |
 | --- | --- | --- |
-| `{ session: { secret, cookie?, revoked? } }` | a cookie your own sign-in sets to `await signSession(secret, name, { grants? })`; signed with HMAC-SHA256, with an expiry and a random id | the name you signed |
+| `{ session: { secret, cookie?, revoked? } }` | a cookie your own sign-in sets to `await signSession(secret, name, { grants? })`, `HttpOnly` and `Secure` over TLS; signed with HMAC-SHA256, with an expiry and a random id | the name you signed |
 | `{ oidc: { issuer, clientId, clientSecret?, baseUrl, secret, allow? } }` | sign-in with an OpenID Connect provider; see below | what `allow(claims)` returns (default: the email) |
 | `{ token }` / `{ tokens: { name: token or { token, grants } } }` | `Authorization: Bearer …`, or `?token=` once in a browser, swapped for an HttpOnly, SameSite=Strict cookie | the token's name |
 | `{ basic: { username, password } }` or a list | HTTP Basic; the browser asks | the username |
 | `{ check(request) }` | whatever your application uses: a session cookie, a header from your proxy | the name `check` returns, or `{ name, grants }` |
+
+Every cookie the panel sets — the token exchanged from `?token=`, the OIDC session and its flow
+cookie — is `HttpOnly` and, where the browser reached the panel over TLS, `Secure`, so the browser
+never sends it back over plain HTTP. The panel knows it is TLS from the socket (mounted on an HTTPS
+server, or served through the Fetch adapter) or from `x-forwarded-proto` where a proxy terminates it;
+a panel served over HTTP sets its cookies without `Secure`, or the browser would drop them and nobody
+could sign in.
 
 Credentials are compared in constant time. Ten failures a minute from one address earn a 429 with
 `retry-after` (`authThrottle`). The address is the socket's; a forwarded header a client can write is
@@ -122,6 +129,11 @@ the named groups only. Every item in the schema says whether this listener may c
 page offers controls only there, and the router refuses the rest with 403. A profile needs every value it
 sets to be editable here. An empty list is refused rather than read as "nothing".
 
+## A health endpoint
+
+`health: true` answers `GET <basePath>/healthz` without authentication, for a load balancer: `ok`, or
+`ok, 2 warnings`. Nothing else is said to an anonymous caller, and it is off unless switched on.
+
 ## Before credentials
 
 In order: the auth throttle; the `Host` header, which a loopback listener requires to be a loopback name
@@ -149,7 +161,7 @@ an HTML form cannot send, so a forged form fails whatever cookies the browser at
 Do not mount a panel on the public server of the application it controls when that application faces the
 internet and a mitigation could lock you out of it — a bot handler that challenges you is a bot handler
 that challenges you on its own panel. Use a listener of its own on loopback or a private network, or a
-path behind your existing administrator sign-in, as in [BIS](../integration/bis.md).
+path behind your existing administrator sign-in, as in [Who sees what](../examples.md#who-sees-what).
 
 ## Related
 

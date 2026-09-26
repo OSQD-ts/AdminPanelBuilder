@@ -59,3 +59,16 @@ export function uid(prefix: string): string {
   holder.__apbIds = (holder.__apbIds ?? 0) + 1;
   return `apb-${prefix}-${holder.__apbIds}`;
 }
+
+/** Marks `element` busy while `work` runs: `aria-busy` for assistive technology, and the stylesheet draws a spinner. */
+export function busy<T>(element: HTMLElement, work: Promise<T>): Promise<T> {
+  element.setAttribute("aria-busy", "true");
+  return work.finally(() => element.removeAttribute("aria-busy"));
+}
+
+/** Plays a highlight the stylesheet keys on `attribute` from its start, even if it is still playing. */
+export function flash(element: HTMLElement, attribute = "data-changed"): void {
+  element.removeAttribute(attribute);
+  void element.offsetWidth;
+  element.setAttribute(attribute, "");
+}

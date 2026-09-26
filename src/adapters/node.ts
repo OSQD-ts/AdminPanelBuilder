@@ -23,7 +23,7 @@ export interface NodeLikeRequest {
   /** Express rewrites `url` under a mount point and keeps the original here. */
   originalUrl?: string | undefined;
   headers: Record<string, string | string[] | undefined>;
-  socket?: { remoteAddress?: string | undefined } | undefined;
+  socket?: { remoteAddress?: string | undefined; encrypted?: boolean | undefined } | undefined;
   on(event: "data", listener: (chunk: Uint8Array | string) => void): unknown;
   on(event: "end", listener: () => void): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
@@ -80,6 +80,8 @@ function toPanelRequest(request: NodeLikeRequest): PanelRequest {
     url: request.originalUrl ?? request.url ?? "/",
     headers,
     address: request.socket?.remoteAddress ?? "",
+    // `encrypted` is what a TLS socket has and a plain one does not.
+    secure: request.socket?.encrypted === true,
     body: (limit) => readBody(request, limit),
   };
 }

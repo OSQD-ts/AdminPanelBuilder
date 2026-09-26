@@ -50,3 +50,15 @@ describe("writing a value for a person", () => {
     expect(numericEntries("not a record")).toEqual([]);
   });
 });
+
+describe("formatting in the page's language", () => {
+  it("leaves out a zero last unit, and writes other languages through Intl", () => {
+    expect(formatDuration(900_000)).toBe("15 min");
+    expect(formatDuration(3_600_000)).toBe("1 h");
+    expect(formatDuration(900_000, "de")).toBe(new Intl.NumberFormat("de", { style: "unit", unit: "minute", unitDisplay: "short" }).format(15));
+    expect(formatAgo(0, 300_000, "de")).toBe(new Intl.RelativeTimeFormat("de", { numeric: "auto", style: "short" }).format(-5, "minute"));
+    expect(formatAgo(0, 300_000, "en")).toBe("5 min ago");
+    expect(formatValue(true, { on: "Ein", off: "Aus" })).toBe("Ein");
+    expect(formatNumber(1234.5, { locale: "de", decimals: 1 })).toBe("1.234,5");
+  });
+});
