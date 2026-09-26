@@ -12,11 +12,17 @@
  *
  * Chromium only: engines draw text differently, and one engine's baselines are enough to catch a
  * layout that broke. Baselines are JPEG to keep the repository light; the tolerance covers that.
+ *
+ * Every theme is drawn in one pinned typeface rather than its own. A theme's font is a stack ending
+ * in `system-ui`, which is a different font file on a laptop than on a runner — different metrics,
+ * a page of another height, and every pixel "different" before anything about the panel has
+ * changed. What these baselines are for is layout and colour, so the typeface is held still and the
+ * rest is compared. The stacks themselves are the themes' own and are checked in tests/themes.test.ts.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type Browser, chromium } from "playwright";
-import { BUILT_IN_THEMES, createAdminPanel, ManualClock } from "../../src/index.js";
+import { BUILT_IN_THEMES, createAdminPanel, defineTheme, ManualClock } from "../../src/index.js";
 
 const ENGINE = process.env.BROWSER_ENGINE ?? "chromium";
 const UPDATE = process.env.UPDATE_SCREENSHOTS === "1";
@@ -33,10 +39,20 @@ afterAll(async () => {
   await browser?.close();
 });
 
+/**
+ * A built-in theme in the one typeface these baselines are drawn in. Liberation, reached through
+ * the Arial alias every Linux fontconfig carries: it is what Material's and Carbon's own stacks
+ * already resolved to, and those were the two themes whose baselines survived the move from a
+ * laptop to a runner while the four ending in `system-ui` did not.
+ */
+function pinned(name: string) {
+  return defineTheme({ name, extends: BUILT_IN_THEMES[name], shape: { font: 'Arial, "Liberation Sans", sans-serif', monoFont: '"Courier New", "Liberation Mono", monospace' } });
+}
+
 /** The same panel every time: a fixed clock, fixed values, a fixed history. */
 function fixture(theme: string, scheme: "light" | "dark"): string {
   const clock = new ManualClock(Date.parse("2026-09-21T12:00:00Z"));
-  const panel = createAdminPanel({ title: "Chess server", instance: "web-1", theme, colorScheme: scheme, clock });
+  const panel = createAdminPanel({ title: "Chess server", instance: "web-1", theme: pinned(theme), colorScheme: scheme, clock });
   const players = panel.viewable(0, { label: "Players online", group: "Games", chart: true, status: { warn: 400, bad: 900 } });
   for (const reading of [120, 180, 260, 330, 412]) {
     clock.advance(60_000);
