@@ -44,18 +44,41 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # First, deliberately: every later step regenerates the client bundle, so one of them
+      # would quietly repair a stale commit instead of failing on it — and the release would
+      # carry a page nobody committed.
+      - name: The committed client bundle is current
+        run: npm run client:check
       - name: Lint
         run: npm run lint
       - name: Type-check
         run: npm run typecheck
       - name: Test
         run: npm test
+      # The docs travel in the tarball, so a link that resolves nowhere ships with it.
+      - name: Every local link and anchor in the markdown resolves
+        run: npm run docs:check
+      # The page is shipped code, and how it behaves under a keyboard, a narrow viewport and
+      # three engines cannot be checked by calling a function. It costs a browser download; a
+      # release is exactly the moment that is worth paying for.
+      - name: Install the browsers
+        run: npx playwright install --with-deps chromium firefox webkit
+      - name: Test the page in a browser
+        run: |
+          npm run test:browser
+          BROWSER_ENGINE=firefox npm run test:browser
+          BROWSER_ENGINE=webkit npm run test:browser
       - name: The write path is within budget
         run: npm run bench:guard
       - name: The packed tarball installs and loads
         run: npm run check:package
-      - name: No high-severity advisories reach a consumer
-        run: npm audit --omit=dev --audit-level=high
+      - name: This library depends on nothing
+        run: |
+          count=$(node -p "Object.keys(require('./package.json').dependencies ?? {}).length")
+          test "$count" -eq 0
+      # No runtime dependencies, so nothing at any level should reach a consumer.
+      - name: No advisory reaches a consumer
+        run: npm audit --omit=dev --audit-level=low
 
   publish:
     needs: verify
@@ -128,8 +151,9 @@ jobs:
           tarball=$(ls osqd-admin-panel-builder-*.tgz)
           size=$(stat -c%s "$tarball")
           echo "$tarball: $size bytes"
-          test "$size" -lt 4000000
-          for required in package/dist/index.js package/dist/index.cjs package/dist/index.d.ts package/dist/cli.js package/dist/adapters/index.js package/dist/element.js package/dist/presets/index.js package/bin/apb.mjs package/docs/index.md package/README.md package/LICENSE; do
+          # ESM split and CJS without maps put it near 1.3 MB; past 2 MB something is bundled twice again.
+          test "$size" -lt 2000000
+          for required in package/dist/index.js package/dist/index.cjs package/dist/index.d.ts package/dist/cli.js package/dist/adapters/index.js package/dist/element.js package/dist/presets/index.js package/dist/sdk.js package/dist/testing.js package/dist/config/index.js package/admin-panel.toml package/bin/apb.mjs package/docs/index.md package/README.md package/LICENSE; do
             tar -tzf "$tarball" | grep -qx "$required" || { echo "::error::$required is missing from the tarball"; exit 1; }
           done
           if tar -tzf "$tarball" | grep -E '\.env$|/\.git/|node_modules/|\.tsbuildinfo$|\.test\.'; then

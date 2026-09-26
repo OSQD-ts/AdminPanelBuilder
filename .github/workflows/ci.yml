@@ -33,12 +33,25 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - name: The build emitted every entry
+      - name: The build emitted every entry, and nothing a test wrote
         run: |
           test -f dist/index.js && test -f dist/index.cjs && test -f dist/index.d.ts
           test -f dist/adapters/index.js && test -f dist/themes/index.js && test -f dist/element.js
           test -f dist/presets/index.js && test -f dist/cli.js && test -f dist/react.js && test -f dist/vue.js
+          if ls dist/*.test.* dist/**/*.test.* 2>/dev/null; then
+            echo "::error::test files leaked into dist"
+            exit 1
+          fi
+
+      # The command line is a published entry point, so a broken launcher is a broken
+      # release. Everything here answers without a panel to talk to.
+      - name: Smoke-test the command line
+        run: |
           node bin/apb.mjs --version
+          node bin/apb.mjs --help | grep -q "apb get <url>"
+          node bin/apb.mjs completion bash | grep -q "_apb"
+          node bin/apb.mjs config admin-panel.toml | grep -q '"port": 9780'
+          if node bin/apb.mjs nonsense; then echo "::error::an unknown command exited 0"; exit 1; fi
 
   package:
     runs-on: ubuntu-latest
@@ -50,8 +63,45 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: No high-severity advisory reaches a consumer
-        run: npm audit --omit=dev --audit-level=high
+
+      - name: This library depends on nothing
+        run: |
+          count=$(node -p "Object.keys(require('./package.json').dependencies ?? {}).length")
+          echo "declared runtime dependencies: $count"
+          test "$count" -eq 0
+
+      # A package with no runtime dependencies cannot inherit an advisory, so the level is
+      # `low` rather than `high`: anything at all here means something became a runtime
+      # dependency without anybody deciding to.
+      - name: No advisory reaches a consumer
+        run: npm audit --omit=dev --audit-level=low
+
+      # The other half of "depends on nothing": nothing in the shipped source imports a
+      # package name. Anchored to the start of an import or export so the word "from"
+      # inside prose in a string literal is not read as one.
+      - name: "Nothing but node: and relative paths is imported at runtime"
+        run: |
+          if grep -rhoE --include="*.ts" --include="*.mts" --include="*.mjs" \
+            "^\s*(import|export)[^'\"]*from ['\"][^'\"]+['\"]" src bin \
+            | grep -oE "['\"][^'\"]+['\"]$" | tr -d "\"'" \
+            | grep -vE '^(node:|\.)' | sort -u | grep .; then
+            echo "::error::the above are imported at runtime but are neither node: builtins nor local files"
+            exit 1
+          fi
+
+      # The same budget the release enforces, so it fails in a pull request rather than
+      # halfway through a publish. The page's client travels twice, as ESM and as CJS.
+      - name: Pack, and stay small
+        run: |
+          npm pack --silent
+          tarball=$(ls osqd-admin-panel-builder-*.tgz)
+          size=$(stat -c%s "$tarball")
+          echo "$tarball: $size bytes"
+          test "$size" -lt 2000000
+          rm -f "$tarball"
+
+      # Everything above checks what is in the package. This checks it can be loaded:
+      # installs the tarball into an empty project and imports every entry as ESM and CJS.
       - name: The packed tarball installs and every entry loads
         run: npm run check:package
 
@@ -84,6 +134,14 @@ jobs:
       - run: npm run test:browser
         env:
           BROWSER_ENGINE: ${{ matrix.engine }}
+      # What the page looked like when a screenshot differed: compare it with the baseline, and if
+      # the difference is only this runner's fonts, commit these as the baselines.
+      - uses: actions/upload-artifact@v4
+        if: failure() && matrix.engine == 'chromium'
+        with:
+          name: screenshots
+          path: tests/browser/screenshots/*.actual.jpg
+          if-no-files-found: ignore
 
   # The write path runs inside the application on every set(). The budgets are ratios against a
   # reference loop measured in the same process, so they mean the same thing on any runner.

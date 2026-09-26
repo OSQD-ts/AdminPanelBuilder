@@ -5,9 +5,10 @@
 | Script | What it answers |
 | --- | --- |
 | `npm run check` | Does it type-check, lint, pass its tests and keep every doc link? Run before a pull request. |
-| `npm run test:browser` | Does the page work under a keyboard, a narrow screen and axe? Run when the client, the layout or a theme changed. |
+| `npm run test:browser` | Does the page work under a keyboard, a narrow screen and axe, and does it still look as it did? Run when the client, the layout or a theme changed. |
+| `npm run test:visual:update` | Accept the page's look as it is now: rewrites the screenshots in `tests/browser/screenshots/`. Look at them before committing. |
 | `npm run check:package` | Does the packed tarball install and load? Run when `package.json`, `tsup.config.ts` or an entry changed. |
-| `npm run bench:guard` | Is the write path still within budget? Run when `core.ts`, `values/` or `blocks/` changed. |
+| `npm run bench:guard` | Are the write path and the read path (schema, state, a stream tick) still within budget? Run when `core.ts`, `panel/`, `values/`, `blocks/` or `server/stream.ts` changed. |
 | `npm run shared:check` | Do the helpers copied from the sibling repositories still match? |
 | `npm run demo` / `npm run simulate` / `npm run playground` | Does it look and behave right? |
 
@@ -105,6 +106,46 @@ src/
 
 Conventional prefixes with a scope (`feat(charts):`, `fix(router):`, `docs(themes):`), a lowercase subject
 in the repository's voice, and a body explaining what was wrong and what happens now.
+
+## Releasing
+
+There is no release procedure: merging to `main` is the release. `.github/workflows/publish.yml` reads the
+commits since the last `v*` tag, works out the version, verifies the commit from scratch — the committed
+client bundle, lint, types, tests, the documentation's links, the page in Chromium, Firefox and WebKit, the
+write-path budgets, the packed tarball — and publishes `@osqd/admin-panel-builder` to npm with provenance.
+It runs on every push, so what decides whether anything is published is the commit message:
+
+| Commit | Effect |
+| --- | --- |
+| `feat: …` / `fix: …` / `perf: …` | patch |
+| `feat!: …`, or a `BREAKING CHANGE:` footer | major — or minor, while the major is 0 |
+| `docs:`, `ci:`, `test:`, `chore:`, `build:`, `refactor:`, `style:` | nothing is published |
+
+That last row is what makes publishing on every push tolerable: a documentation fix releases nothing, so the
+registry does not collect versions whose only difference is a reworded comment. A feature is a patch on
+purpose — this repository releases on every push, and under the usual reading a fortnight of ordinary work
+would be a fortnight of minor bumps, which measures how often somebody pushed rather than anything about the
+library. Anything larger is claimed out loud with a footer on any commit in the range:
+
+```
+feat(charts): draw a chart against another value
+
+Release-As: minor
+```
+
+`Release-As:` takes an exact version, or `major`, `minor` or `patch`, and overrides the derived version in
+both directions — including releasing a push that would otherwise publish nothing.
+`node scripts/next-version.mjs --explain` prints the reasoning for the history as it stands.
+
+Pushing a `v1.2.3` tag is the other way in: it publishes exactly that version from the tagged commit and
+commits nothing back, which is how a release is made from a branch or repeated after a stranded one. A
+prerelease (`1.2.3-rc.1`) goes to the `next` dist-tag, so `npm install @osqd/admin-panel-builder` keeps
+resolving the last stable version. Running the workflow by hand (`workflow_dispatch`) is a dry run by
+default: it works out the version and packs the tarball, and publishes nothing.
+
+The repository needs one secret, `NPM_TOKEN`, with publish rights on the `@osqd` scope. Nothing else is
+configured: the version, the tag and the release commit are all derived, and `[skip ci]` on the release
+commit keeps it from starting a second run.
 
 ## Licensing of contributions
 
