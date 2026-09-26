@@ -192,9 +192,19 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json src/version.ts
-          git commit -m "Release $version [skip ci]"
-          landed=no
+          # The first release of a version package.json already carries — the one this repository
+          # starts at — changes no file, and `git commit` with nothing staged exits non-zero. There
+          # is still a tag to make: it is what the next version is derived from, and 0.1.0 was
+          # published and left untagged exactly here.
+          if git diff --cached --quiet; then
+            echo "::notice::the tree already carries $version; tagging the commit as it stands"
+            landed=yes
+          else
+            git commit -m "Release $version [skip ci]"
+            landed=no
+          fi
           for attempt in 1 2 3 4 5; do
+            if [ "$landed" = yes ]; then break; fi
             if git push origin HEAD:main; then landed=yes; break; fi
             echo "::warning::push $attempt was refused; replaying the release commit on top of main"
             if ! git pull --rebase origin main; then

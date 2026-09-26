@@ -137,6 +137,10 @@ Release-As: minor
 both directions — including releasing a push that would otherwise publish nothing.
 `node scripts/next-version.mjs --explain` prints the reasoning for the history as it stands.
 
+The release commit is skipped when there is nothing in it — the first release of a version the tree
+already carries changes no file — and the tag is made either way, because the tag is what the next
+version is derived from.
+
 Pushing a `v1.2.3` tag is the other way in: it publishes exactly that version from the tagged commit and
 commits nothing back, which is how a release is made from a branch or repeated after a stranded one. A
 prerelease (`1.2.3-rc.1`) goes to the `next` dist-tag, so `npm install @osqd/admin-panel-builder` keeps
