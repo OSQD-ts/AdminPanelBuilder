@@ -41,7 +41,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 26
           cache: npm
       - run: npm ci
       # First, deliberately: every later step regenerates the client bundle, so one of them
@@ -98,7 +98,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 26
           cache: npm
           registry-url: https://registry.npmjs.org
       - run: npm ci
