@@ -25,6 +25,7 @@ checks this table against the code.
 | `DEFAULT_PORT` | 9780 | Clear of hackerpot's 9500/9501 and bothandlerjs's 9674. |
 | `MAX_PAGE_SIZE` | 200 | A screenful several times over, and a bounded response however many rows a table has. |
 | `MAX_SEARCH_LENGTH` | 200 | Longer is a paste, not a search. |
+| `MAX_DISABLED_REASON` | 200 | Why a row action is disabled for a row: a sentence beside a button, not a page. Longer is cut. |
 | `MAX_FEED_CAPACITY` | 2000 | Entries a feed may keep; past a few thousand a feed is a log and belongs in one. |
 | `MAX_ENTRY_TEXT` | 1000 | A feed line longer than this is a payload, and belongs in a table. |
 | `MAX_REVERT_MS` | 604800000 | A week. A "temporary" change longer than that is a setting. |

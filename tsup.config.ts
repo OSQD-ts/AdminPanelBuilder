@@ -11,7 +11,14 @@ async function generatedSourcesOutOfMaps(): Promise<void> {
   for (const file of await readdir("dist", { recursive: true })) {
     if (!file.endsWith(".map")) continue;
     const path = join("dist", file);
-    const map = JSON.parse(await readFile(path, "utf8")) as { sources?: string[]; sourcesContent?: Array<string | null> };
+    // Every config runs this over the whole of dist/, so a map another config is still writing is
+    // skipped here and done by a later pass, rather than failing the build on half a file.
+    let map: { sources?: string[]; sourcesContent?: Array<string | null> };
+    try {
+      map = JSON.parse(await readFile(path, "utf8")) as typeof map;
+    } catch {
+      continue;
+    }
     if (map.sources === undefined || map.sourcesContent === undefined) continue;
     let changed = false;
     map.sources.forEach((source, index) => {

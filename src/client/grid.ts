@@ -43,6 +43,12 @@ const CHECK_EVERY_MS = 500;
 /** What is done with a card, as opposed to read from it: where the foot of a card begins. */
 const DOING = ".apb-editor, .apb-inputs, .apb-profile-settings, .apb-button, .apb-why, .apb-when, .apb-toolbar";
 
+/**
+ * The fewest rows a table card is given: its heading, the search, and a line of rows or of "nothing
+ * here". A table is otherwise as tall as what it holds, up to its largest size, and scrolls past it.
+ */
+const TABLE_FLOOR = 2;
+
 /** What a drawing is assumed to have wanted where that is not known, and the slack around both. */
 /** Rows to spare over what a card holds, past which its parts stay together rather than spreading. */
 const ROOM_APART = 3;
@@ -110,6 +116,11 @@ export class GridView {
       cancelAnimationFrame(this.refit);
       this.refit = requestAnimationFrame(() => this.fit());
     }, true);
+    // A table held at its height while it was searched gives the room back once focus moves on.
+    element.addEventListener("focusout", () => {
+      cancelAnimationFrame(this.refit);
+      this.refit = requestAnimationFrame(() => this.fit());
+    });
     // Measured when drawn and when its tab is shown (see render.ts), so it is never painted at the
     // wrong column count; a later resize is taken on the next frame. Changing the columns changes
     // the grid's own height, and doing that inside the observer's callback makes it call again.
@@ -299,10 +310,25 @@ export class GridView {
       // size it was given or chose.
       const folded = card.element.querySelector<HTMLElement>(".apb-card-body")?.hidden === true;
       const chosen = this.fixed.get(id) ?? (card.sizing.locked ? card.sizing.pref : undefined);
-      if (chosen !== undefined) {
+      // A table is as tall as its rows, never a fixed box of them: an empty or short one is short.
+      // Its measured need (heading, search, rows, pager) decides, from a floor up to the size it may
+      // take: its largest, or the size given in code or chosen on the page, which for a table is a
+      // most, not an exact height. Until it is measured it takes the size it would have had.
+      const table = need > 0 && card.element.querySelector(".apb-block-table") !== null;
+      if (chosen !== undefined && table) {
+        const full = scale(chosen);
+        const size = { w: full.w, h: folded ? Math.max(1, Math.min(need, full.h)) : Math.min(full.h, Math.max(TABLE_FLOOR, need)) };
+        packable.push({ id, pref: size, min: size, max: size, locked: true });
+      } else if (chosen !== undefined) {
         const full = scale(chosen);
         const size = folded ? { w: full.w, h: Math.max(1, Math.min(need, full.h)) } : full;
         packable.push({ id, pref: size, min: size, max: size, locked: true });
+      } else if (table) {
+        const pref = scale(card.sizing.pref);
+        const most = scale(card.sizing.max);
+        const h = folded ? Math.max(1, need) : Math.min(Math.max(most.h, TABLE_FLOOR), Math.max(TABLE_FLOOR, need));
+        const min = scale(card.sizing.min);
+        packable.push({ id, pref: { w: pref.w, h }, min: { w: min.w, h: Math.min(h, Math.max(TABLE_FLOOR, min.h)) }, max: { w: most.w, h: Math.max(h, most.h) }, locked: false, elastic: true });
       } else {
         const grow = (size: CardSize): CardSize => (folded ? { w: size.w, h: Math.max(1, need) } : { w: size.w, h: Math.max(size.h, need) });
         // A gauge holds nothing that grows, whatever family it keeps; a chart, a table or a feed does.
@@ -526,7 +552,10 @@ export class GridView {
         const chosen = this.fixed.get(card.id) ?? (card.sizing.locked ? card.sizing.pref : undefined);
         const ceiling = arranging ? place.h : Math.max(place.h, chosen === undefined ? card.sizing.max.h : chosen.h);
         const canGrow = needed <= ceiling;
-        if (!arranging && canGrow && needed !== this.needs.get(card.id)) {
+        // A table being searched does not shrink under the cursor at every keystroke: it keeps its
+        // rows while the search has focus, and gives them back when focus leaves (see focusout).
+        const typing = needed < (this.needs.get(card.id) ?? 0) && card.element.querySelector(".apb-block-table") !== null && card.element.contains(this.focused());
+        if (!arranging && canGrow && !typing && needed !== this.needs.get(card.id)) {
           this.needs.set(card.id, needed);
           packAgain = true;
         }
@@ -611,6 +640,11 @@ export class GridView {
     const focused = root.activeElement;
     for (const element of wanted) this.element.append(element);
     if (focused instanceof HTMLElement && this.element.contains(focused) && root.activeElement !== focused) focused.focus({ preventScroll: true });
+  }
+
+  /** What has focus in this grid's document or shadow root. */
+  private focused(): Element | null {
+    return (this.element.getRootNode() as Document | ShadowRoot).activeElement ?? null;
   }
 
   /** Tells each card how much room it has on the screen now. */

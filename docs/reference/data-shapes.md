@@ -101,7 +101,10 @@ one-second bucket; a re-sent newest bucket has the same `t` and replaces the one
 ## Tables
 
 `GET /api/tables/:id` answers `{ table: { rows, total, offset, limit } }`, each row
-`{ id, cells: Record<column, JsonValue>, status?: Record<column, Status> }`.
+`{ id, cells: Record<column, JsonValue>, status?: Record<column, Status>, actions?: string[], disabled?: Record<action, string> }`.
+`actions` lists the row actions this row offers, and is present only when one of the table's row
+actions has `when` or `enabledWhen`; without it every action applies. `disabled` names those shown
+but not runnable, with the reason (`""` when none was given).
 
 ## ChangeRecord
 

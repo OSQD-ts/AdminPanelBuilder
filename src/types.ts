@@ -436,8 +436,15 @@ export interface TablePage<Row> {
  */
 export type ActionVisibility = "self" | "runners" | "everyone";
 
-/** A button on every row. */
-export interface TableRowAction {
+/**
+ * A condition on a row, for a row action's `when` and `enabledWhen`, without a function: the row's
+ * `field` equals a value, or is one of several. `field` must be one of the table's columns, so a
+ * misspelt field fails when the panel is made rather than hiding the action on every row.
+ */
+export type RowMatch = { field: string; equals: string | number | boolean | null } | { field: string; in: ReadonlyArray<string | number | boolean | null> };
+
+/** A button on the rows it applies to: every row, unless `when` or `enabledWhen` say otherwise. */
+export interface TableRowAction<Row = Record<string, unknown>> {
   id?: string | undefined;
   label: string;
   /** `context.input` holds the operator's answers to `input`, checked; the row is the first argument. */
@@ -450,6 +457,18 @@ export interface TableRowAction {
   input?: Readonly<Record<string, InputField>> | undefined;
   /** Who sees what it answered. Default: the panel's `actionVisibility`. */
   visibility?: ActionVisibility | undefined;
+  /**
+   * Which rows show the button at all: `(row) => boolean`, or a `RowMatch`. Worked out on the server
+   * for every row it sends, and again when the action is run, so a button the page still shows for
+   * a row that has since changed is refused rather than run. A `fetch` table needs `findRow` for it.
+   */
+  when?: ((row: Row) => boolean) | RowMatch | undefined;
+  /**
+   * Which rows may run it, of those that show it: the others show it disabled. `(row) => true` runs;
+   * `false` is disabled; a string is disabled, and is the reason the page gives. A `RowMatch` may
+   * carry its own `reason`. Checked again on the server when the action is run, like `when`.
+   */
+  enabledWhen?: ((row: Row) => boolean | string) | (RowMatch & { reason?: string | undefined }) | undefined;
 }
 
 export interface TableOptions<Row> extends CommonOptions {
@@ -467,7 +486,12 @@ export interface TableOptions<Row> extends CommonOptions {
   pageSize?: number | undefined;
   /** Show a search box. Default true. */
   searchable?: boolean | undefined;
-  actions?: readonly TableRowAction[] | undefined;
+  actions?: readonly TableRowAction<Row>[] | undefined;
+  /**
+   * One row by its id, for a `fetch` table whose row actions have `when` or `enabledWhen`: running
+   * one checks the row as it is now. A `rows` table finds it among its rows itself.
+   */
+  findRow?: ((rowId: string) => Row | undefined | Promise<Row | undefined>) | undefined;
   /** A query answered after this long fails rather than holding the page. Default 10 seconds. */
   timeoutMs?: number | undefined;
 }
@@ -829,7 +853,18 @@ export interface PendingChange {
 }
 
 export interface TableRowsAnswer {
-  rows: Array<{ id: string; cells: Record<string, JsonValue>; status?: Record<string, Status> }>;
+  rows: Array<{
+    id: string;
+    cells: Record<string, JsonValue>;
+    status?: Record<string, Status>;
+    /**
+     * The row actions this row shows, by id, when any of the table's actions has `when` or
+     * `enabledWhen`; absent, every action shows. The page draws only these.
+     */
+    actions?: string[];
+    /** Of those, the ones shown disabled, with the reason given (`""` for none). */
+    disabled?: Record<string, string>;
+  }>;
   total: number;
   offset: number;
   limit: number;

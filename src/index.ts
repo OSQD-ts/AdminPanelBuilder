@@ -17,7 +17,7 @@ export { MAX_CARD_ROWS, MAX_GRID_COLUMNS, MAX_LAYOUT_BYTES, MAX_LAYOUT_ENTRIES }
 export type { ChangeMessage, PanelSync, PendingMessage, RedisPublisherLike, RedisSubscriberLike, RedisSyncOptions, ScheduleMessage, SyncMessage } from "./panel/sync.js";
 export { action, bind, chart, configure, counter, defaultPanel, feed, group, modifiable, percentiles, profile, rate, table, viewable } from "./default-panel.js";
 export { PanelFeed, MAX_FEED_CAPACITY, MAX_ENTRY_TEXT } from "./blocks/feed.js";
-export { PanelTable, MAX_PAGE_SIZE, MAX_SEARCH_LENGTH } from "./blocks/table.js";
+export { PanelTable, MAX_DISABLED_REASON, MAX_PAGE_SIZE, MAX_SEARCH_LENGTH } from "./blocks/table.js";
 export type { Counter, CounterOptions, PercentileOptions, Percentiles, RateOptions } from "./blocks/counter.js";
 export { fileChangeLog, memoryChangeLog, MIN_ROTATE_BYTES, verifyChain } from "./change-log.js";
 export type { ChangeLogStore, FileChangeLogOptions } from "./change-log.js";
@@ -90,6 +90,7 @@ export type {
   TablePage,
   TableQuery,
   TableRowAction,
+  RowMatch,
   TableRowsAnswer,
   TableSchema,
   BindOptions,

@@ -322,6 +322,16 @@ td[data-status="bad"] { color: var(--apb-bad); }
 .apb-table th, .apb-table td { vertical-align: top; }
 .apb-table-controls { display: flex; flex-wrap: wrap; gap: var(--apb-spacing); align-items: center; }
 .apb-table-controls:empty { display: none; }
+/* The search is where filters are typed: it shrinks with its card, to the narrowest card there is,
+   and is never one of the things a small card drops. */
+.apb-table-controls > .apb-input[type="search"] { flex: 1 1 12em; width: 100%; min-width: 0; max-width: 28em; }
+/* Nothing to list is one line under the search, not a box with a picture: a table that is empty
+   now takes the room of a sentence, and the search and the column headings are what is left. */
+.apb-block-table[data-empty] .apb-table { display: none; }
+.apb-block-table[data-empty] .apb-table-wrap > .apb-empty { display: block; padding: calc(var(--apb-spacing) * .75) var(--apb-spacing); text-align: left; color: var(--apb-ink-secondary); }
+.apb-block-table[data-empty] .apb-table-wrap > .apb-empty::before { content: none; }
+/* A row action this row offers but may not run: shown, quietly, with why as its tooltip. */
+.apb-row-actions > .apb-tool[data-unavailable] { cursor: not-allowed; }
 .apb-sort { appearance: none; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; font-weight: var(--apb-strong-weight); }
 .apb-sort:hover { color: var(--apb-ink); }
 th[aria-sort="ascending"] .apb-sort::after { content: " ▲"; color: var(--apb-link); }
@@ -513,7 +523,7 @@ th[aria-sort="descending"] .apb-sort::after { content: " ▼"; color: var(--apb-
 .apb-card[data-drawing="off"] .apb-chart > :is(.apb-chart-body, .apb-legend, .apb-chart-readout, .apb-chart-tools, .apb-empty) { display: none; }
 /* Brief drops what is read, never what is used: every control a card offers stays, and so does the
    way to the numbers behind a chart — on a card this small they are the readable half of it. */
-.apb-card[data-detail="brief"] :is(.apb-description, .apb-meta, .apb-trend, .apb-badges, .apb-chart-tools, .apb-legend, .apb-timeline, .apb-range-scale, .apb-axis, .apb-pane-description, .apb-table-controls, .apb-feed-tools) { display: none; }
+.apb-card[data-detail="brief"] :is(.apb-description, .apb-meta, .apb-trend, .apb-badges, .apb-chart-tools, .apb-legend, .apb-timeline, .apb-range-scale, .apb-axis, .apb-pane-description, .apb-feed-tools) { display: none; }
 /* Spacing follows how much room a card has: a small card gives its reading the space instead of its
    edges, a large one breathes. */
 .apb-grid > .apb-card[data-detail="brief"] { padding: var(--apb-spacing) calc(var(--apb-spacing) * 1.25); gap: calc(var(--apb-spacing) / 2); }

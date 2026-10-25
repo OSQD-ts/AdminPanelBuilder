@@ -52,6 +52,34 @@ panel.table("Queued mail", {
 
   `confirm: "type"` asks for the label to be typed in that dialog, and `visibility` says who reads the
   result, as for [an action](actions.md#who-reads-the-result).
+- **Row actions on some rows only.** `when` hides a row action on the rows it does not apply to;
+  `enabledWhen` shows it disabled, with the reason it gives as the button's tooltip and its
+  description for a screen reader. Each is a function of the row, or a match on one of the table's
+  columns (`{ field, equals }` or `{ field, in }`; `enabledWhen`'s may carry a `reason`), checked
+  against the columns when the panel is made:
+
+  ```ts
+  panel.table("Accounts", {
+    columns: ["id", "name", "status"],
+    rows: () => accounts.list(),
+    actions: [
+      { label: "Suspend", when: { field: "status", equals: "active" }, run: (id, { by }) => accounts.suspend(id, by) },
+      { label: "Reactivate", when: { field: "status", equals: "suspended" }, run: (id, { by }) => accounts.reactivate(id, by) },
+      { label: "Delete", destructive: true, enabledWhen: (row) => row.status === "closed" || "close the account first", run: (id) => accounts.remove(id) },
+    ],
+  });
+  ```
+
+  The server works them out for every row it sends — the page draws only the buttons a row offers —
+  and again when one is run, on the row as it is then: a button drawn for a row that has changed
+  since is refused with `409 conflict` and a sentence, never run. A condition that throws hides the
+  action. A `fetch` table needs `findRow(rowId)` for this, so the panel can look at one row as it is
+  now; a `rows` table finds it among its rows. A disabled reason is at most `MAX_DISABLED_REASON`
+  characters.
+- **Height.** A table's card is as tall as what it holds, from two rows (its heading, the search and
+  one line) up to ten, and scrolls past that: an empty table is one line under its search. The search
+  is never one of the things a small card drops. A `size` given for a table is the most it may take,
+  not a fixed height, and so is a size chosen while arranging. One page of rows shows no pager.
 - **The page refetches a table only when something changed** and only while its tab is showing: a
   `fetch` may be a database query, and a poll a second per viewer would be a query a second per viewer.
 

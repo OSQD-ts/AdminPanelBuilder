@@ -39,7 +39,7 @@ export type EditOutcome =
   | { ok: true; value: WireValue }
   | { ok: true; pending: PendingChange }
   | { ok: false; reason: "not-found" | "not-editable" | "not-allowed" | "invalid" | "conflict"; message: string; refusal?: Refusal | undefined };
-export type ActionOutcome = { ok: true; message: string } | { ok: true; pending: PendingChange } | { ok: false; reason: "not-found" | "not-allowed" | "invalid" | "failed"; message: string; refusal?: Refusal | undefined };
+export type ActionOutcome = { ok: true; message: string } | { ok: true; pending: PendingChange } | { ok: false; reason: "not-found" | "not-allowed" | "invalid" | "conflict" | "failed"; message: string; refusal?: Refusal | undefined };
 
 /** Whether a scope lets the viewer edit values in `group`. */
 export function canEdit(scope: PanelScope, group: string): boolean {

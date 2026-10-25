@@ -14,7 +14,7 @@ import { AdminPanelConfigError } from "../errors.js";
 import { withDeadline } from "../internal/async.js";
 import { checkId, slug } from "../internal/ids.js";
 import { rejectUnknown } from "../internal/options.js";
-import type { CardSize, DateFormat, ImageOptions, JsonValue, QrOptions, Span, Status, StatusRule, TableColumn, TableOptions, TableQuery, TableRowsAnswer, TableSchema } from "../types.js";
+import type { CardSize, DateFormat, ImageOptions, JsonValue, QrOptions, RowMatch, Span, Status, StatusRule, TableColumn, TableOptions, TableQuery, TableRowAction, TableRowsAnswer, TableSchema } from "../types.js";
 import { checkDisplay } from "../values/display.js";
 import { toJson } from "../values/kinds.js";
 import { checkStatusRule, statusOf } from "../values/status.js";
@@ -27,7 +27,7 @@ export const MAX_PAGE_SIZE = 200;
 export const MAX_SEARCH_LENGTH = 200;
 const DEFAULT_TABLE_TIMEOUT_MS = 10_000;
 const COLUMN_KEYS = ["key", "label", "format", "dateFormat", "image", "qr", "unit", "decimals", "sortable", "status"];
-const TABLE_KEYS = ["id", "label", "description", "group", "order", "span", "size", "columns", "rows", "fetch", "rowId", "pageSize", "searchable", "actions", "timeoutMs"];
+const TABLE_KEYS = ["id", "label", "description", "group", "order", "span", "size", "columns", "rows", "fetch", "findRow", "rowId", "pageSize", "searchable", "actions", "timeoutMs"];
 
 export interface ResolvedColumn {
   key: string;
@@ -54,6 +54,21 @@ export interface RowAction {
   /** The fields it asks for, checked like an action's. */
   input: ResolvedField[] | undefined;
   visibility: import("../types.js").ActionVisibility | undefined;
+  /** Whether a row shows it; undefined: every row. */
+  when: ((row: unknown) => boolean) | undefined;
+  /** Whether a row may run it: `true`, or the reason it may not (`""` for none given); undefined: every row that shows it. */
+  enabledWhen: ((row: unknown) => true | string) | undefined;
+}
+
+/** Whether `row` shows `action` and may run it, and if not, why. A condition that throws hides the action: a button is never offered on a guess. */
+export function availability(action: RowAction, row: unknown): { shown: boolean; disabled?: string } {
+  try {
+    if (action.when !== undefined && !action.when(row)) return { shown: false };
+    const enabled = action.enabledWhen === undefined ? true : action.enabledWhen(row);
+    return enabled === true ? { shown: true } : { shown: true, disabled: enabled };
+  } catch {
+    return { shown: false };
+  }
 }
 
 export class PanelTable<Row = Record<string, unknown>> {
@@ -91,7 +106,7 @@ export class PanelTable<Row = Record<string, unknown>> {
     this.description = options.description;
     this.columns = options.columns.map((column) => resolveColumn(label, column));
     this.rowActions = (options.actions ?? []).map((action, index) => {
-      rejectUnknown(action, ["id", "label", "run", "confirm", "destructive", "timeoutMs", "input", "visibility"], `table "${label}", action ${index + 1}`);
+      rejectUnknown(action, ["id", "label", "run", "confirm", "destructive", "timeoutMs", "input", "visibility", "when", "enabledWhen"], `table "${label}", action ${index + 1}`);
       if (action.confirm !== undefined && typeof action.confirm !== "boolean" && action.confirm !== "type") throw new AdminPanelConfigError(`table "${label}" has a row action "${action.label}" with confirm ${JSON.stringify(action.confirm)}; it is true, false or "type"`);
       if (typeof action.run !== "function") throw new AdminPanelConfigError(`table "${label}" has a row action "${action.label}" with nothing to run`);
       return {
@@ -104,7 +119,34 @@ export class PanelTable<Row = Record<string, unknown>> {
         typeToConfirm: action.confirm === "type",
         input: action.input === undefined ? undefined : resolveInput(`${label}: ${action.label}`, action.input),
         visibility: checkVisibility(action.visibility, `table "${label}", row action "${action.label}": visibility`),
+        when: compileWhen(label, action, this.columns, this.rowId),
+        enabledWhen: compileEnabledWhen(label, action, this.columns, this.rowId),
       };
+    });
+    this.conditional = this.rowActions.some((action) => action.when !== undefined || action.enabledWhen !== undefined);
+    // Running a conditional action checks the row as it is now, so the panel must be able to find
+    // it: a `rows` table looks among its rows, a `fetch` table has no way to without `findRow`.
+    if (this.conditional && options.fetch !== undefined && options.findRow === undefined) {
+      throw new AdminPanelConfigError(`table "${label}" has row actions with when or enabledWhen and rows from fetch, so it needs findRow(rowId): running one checks the row as it is now`);
+    }
+    if (options.findRow !== undefined && typeof options.findRow !== "function") throw new AdminPanelConfigError(`table "${label}" has a findRow that is not a function`);
+  }
+
+  /** @internal Whether any row action depends on the row. */
+  readonly conditional: boolean;
+
+  /**
+   * @internal The row with this id as it is now, for checking a conditional row action before it
+   * runs: `findRow`, or a search of `rows`. Undefined when there is no such row any more.
+   */
+  async rowFor(rowId: string): Promise<Row | undefined> {
+    const find = this.options.findRow;
+    if (find !== undefined) return withDeadline(Promise.resolve().then(() => find(rowId)), this.timeoutMs, `the table "${this.label}"`);
+    const source = this.options.rows;
+    const all = typeof source === "function" ? await withDeadline(Promise.resolve().then(source), this.timeoutMs, `the table "${this.label}"`) : (source ?? []);
+    return all.find((row) => {
+      const id = cell(row, this.rowId);
+      return id !== undefined && id !== null && String(id) === rowId;
     });
   }
 
@@ -178,6 +220,19 @@ export class PanelTable<Row = Record<string, unknown>> {
         const id = cell(row, this.rowId);
         const out: TableRowsAnswer["rows"][number] = { id: id === undefined || id === null ? String(effective.offset + index) : String(id), cells };
         if (Object.keys(status).length > 0) out.status = status;
+        // Which actions this row offers, worked out here so the page draws only what may be run.
+        if (this.conditional) {
+          const shown: string[] = [];
+          const disabled: Record<string, string> = {};
+          for (const action of this.rowActions) {
+            const state = availability(action, row);
+            if (!state.shown) continue;
+            shown.push(action.id);
+            if (state.disabled !== undefined) disabled[action.id] = state.disabled;
+          }
+          out.actions = shown;
+          if (Object.keys(disabled).length > 0) out.disabled = disabled;
+        }
         return out;
       }),
       total,
@@ -244,4 +299,53 @@ function compare(a: unknown, b: unknown): number {
   if (b === undefined || b === null) return -1;
   if (typeof a === "number" && typeof b === "number") return a - b;
   return String(a).localeCompare(String(b), undefined, { numeric: true });
+}
+
+/** The longest reason a disabled row action may give: a sentence, not a page. */
+export const MAX_DISABLED_REASON = 200;
+
+/** A `RowMatch` as a test of a row, checked against the table's columns. */
+function compileMatch(where: string, match: RowMatch, columns: readonly ResolvedColumn[], rowId: string, extra: readonly string[]): (row: unknown) => boolean {
+  if (match === null || typeof match !== "object" || Array.isArray(match)) throw new AdminPanelConfigError(`${where} is a function or { field, equals } / { field, in }`);
+  rejectUnknown(match, ["field", "equals", "in", ...extra], where);
+  const field = (match as { field?: unknown }).field;
+  if (typeof field !== "string" || (field !== rowId && !columns.some((column) => column.key === field))) {
+    throw new AdminPanelConfigError(`${where} names the field ${JSON.stringify(field)}, which is not one of the table's columns (${columns.map((column) => column.key).join(", ")})`);
+  }
+  const scalar = (value: unknown): boolean => value === null || ["string", "number", "boolean"].includes(typeof value);
+  const hasEquals = Object.hasOwn(match, "equals");
+  const hasIn = Object.hasOwn(match, "in");
+  if (hasEquals === hasIn) throw new AdminPanelConfigError(`${where} needs exactly one of equals or in`);
+  if (hasEquals) {
+    const wanted = (match as { equals: unknown }).equals;
+    if (!scalar(wanted)) throw new AdminPanelConfigError(`${where}: equals is a string, number, boolean or null`);
+    return (row) => cell(row, field) === wanted;
+  }
+  const list = (match as { in: unknown }).in;
+  if (!Array.isArray(list) || list.length === 0 || !list.every(scalar)) throw new AdminPanelConfigError(`${where}: in is a non-empty list of strings, numbers, booleans or null`);
+  const set = new Set<unknown>(list);
+  return (row) => set.has(cell(row, field));
+}
+
+function compileWhen(table: string, action: TableRowAction<never>, columns: readonly ResolvedColumn[], rowId: string): RowAction["when"] {
+  const when = action.when as unknown;
+  if (when === undefined) return undefined;
+  if (typeof when === "function") return (row) => (when as (row: unknown) => unknown)(row) === true;
+  return compileMatch(`table "${table}", row action "${action.label}": when`, when as RowMatch, columns, rowId, []);
+}
+
+function compileEnabledWhen(table: string, action: TableRowAction<never>, columns: readonly ResolvedColumn[], rowId: string): RowAction["enabledWhen"] {
+  const enabled = action.enabledWhen as unknown;
+  if (enabled === undefined) return undefined;
+  const where = `table "${table}", row action "${action.label}": enabledWhen`;
+  const reasonOf = (said: unknown): true | string => {
+    if (said === true) return true;
+    if (typeof said === "string") return said.trim().slice(0, MAX_DISABLED_REASON);
+    return "";
+  };
+  if (typeof enabled === "function") return (row) => reasonOf((enabled as (row: unknown) => unknown)(row));
+  const reason = (enabled as { reason?: unknown }).reason;
+  if (reason !== undefined && (typeof reason !== "string" || reason.length > MAX_DISABLED_REASON)) throw new AdminPanelConfigError(`${where}: reason is a sentence of at most ${MAX_DISABLED_REASON} characters`);
+  const test = compileMatch(where, enabled as RowMatch, columns, rowId, ["reason"]);
+  return (row) => (test(row) ? true : (reason ?? ""));
 }

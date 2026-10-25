@@ -144,7 +144,12 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
       if (schema.actions.length > 0) {
         const td = el("td", "apb-row-actions");
         td.dataset.label = "";
+        // The server says which actions this row offers (`row.actions`, when any depends on the
+        // row); only those are drawn. Without the list, every action applies to every row.
+        const offered = row.actions === undefined ? undefined : new Set(row.actions);
         for (const action of schema.actions) {
+          if (offered !== undefined && !offered.has(action.id)) continue;
+          const why = row.disabled?.[action.id];
           const className = action.destructive ? "apb-tool apb-tool-destructive" : "apb-tool";
           const done = (said: string): void => {
             message.dataset.ok = "true";
@@ -164,9 +169,20 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
                   message.textContent = explain(problem, t);
                 }
               });
-          button.disabled = !schema.runnable;
+          button.disabled = !schema.runnable || why !== undefined;
           button.setAttribute("aria-label", `${action.label}: ${row.id}`);
           td.append(button);
+          // Shown, but not for this row: the reason is the button's tooltip and its description for
+          // a screen reader, which a disabled button's title alone does not reliably give.
+          if (why !== undefined) {
+            const reason = why === "" ? t("rowActionDisabled") : why;
+            const note = el("span", "apb-sr", reason);
+            note.id = uid("why");
+            button.title = reason;
+            button.setAttribute("aria-describedby", note.id);
+            button.dataset.unavailable = "";
+            td.append(note);
+          }
         }
         tr.append(td);
       }
@@ -179,6 +195,10 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
     range.textContent = total === 0 ? "" : t("tableRange", { from: offset + 1, to: offset + answer.rows.length, total });
     previous.disabled = offset === 0;
     next.disabled = offset + answer.rows.length >= total;
+    // One page holds everything: no pager, so a short table is as short as its rows.
+    pager.hidden = offset === 0 && answer.rows.length >= total;
+    // An empty table is one line, not a box with a picture: the search above it is what matters.
+    wrap.toggleAttribute("data-empty", answer.rows.length === 0);
   };
 
   previous.addEventListener("click", () => {

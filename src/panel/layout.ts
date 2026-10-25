@@ -129,7 +129,9 @@ function kindSizing(item: ItemSchema, chart: DrawnAs | undefined): { pref: CardS
       if (item.over === "keys" || item.kind === "histogram") return sizes([6, 4], [4, 3], [12, 8]);
       return item.placement === "group" ? sizes([12, 5], [6, 4], [12, 8]) : sizes([6, 5], [4, 4], [12, 8]);
     case "table":
-      return sizes([12, 5], [6, 4], [12, 10]);
+      // Only a starting size: on the page a table is as tall as its rows (src/client/grid.ts), from
+      // two rows — heading, search, a line — up to ten, and scrolls past that.
+      return sizes([12, 5], [6, 2], [12, 10]);
     case "feed":
       return sizes([6, 5], [4, 4], [12, 8]);
     case "action":

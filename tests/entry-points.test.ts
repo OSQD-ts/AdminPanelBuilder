@@ -84,6 +84,7 @@ const SURFACE: Record<string, readonly string[]> = {
     "LOCALES",
     "MAX_CARD_ROWS",
     "MAX_CHANGES",
+    "MAX_DISABLED_REASON",
     "MAX_ENTRY_TEXT",
     "MAX_FEED_CAPACITY",
     "MAX_GRID_COLUMNS",

@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Row actions on some rows only: `when` hides a row action on rows it does not apply to,
+  `enabledWhen` shows it disabled with a reason. Either is a function of the row or a
+  `{ field, equals | in }` match on a column. The server works them out for every row it sends
+  (`actions` and `disabled` on each row) and again when one is run, refusing a stale button with
+  `409 conflict`. A `fetch` table needs `findRow(rowId)` to use them. `MAX_DISABLED_REASON`.
 - **Times in a zone and a shape you choose.** `createAdminPanel({ timeZone, dateFormat, dateLocale })`
   writes every timestamp on the page — cards, tables, chart axes and tips, Activity, feeds, scheduled
   changes — in that IANA zone and shape (`"relative"`, `"date"`, `"time"`, `"datetime"`,
@@ -335,6 +340,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A table's card is as tall as what it holds, from two rows up to ten, instead of a box of about ten
+  rows whatever it held: an empty table is one line under its search, and one page of rows shows no
+  pager. A `size` given for a table, or chosen while arranging, is now the most it may take.
+- The search field of a table is no longer hidden on small cards; it shrinks with the card. A table
+  being searched keeps its height while the search has focus, so typing does not move the page.
 - **"Read on every refresh" is no longer on every live card.** It said the same thing on most cards and
   crowded the reading; a viewer who wants it turns on "Say how each value is read" in Settings.
 - **A `format` the page does not write is refused at declaration** instead of being shown plain.

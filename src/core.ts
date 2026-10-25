@@ -24,7 +24,7 @@ import { listenPanel, type PanelServer } from "./adapters/listen.js";
 import { createPanelHandler, type PanelRequestHandler } from "./adapters/node.js";
 import { type Counter, type CounterOptions, declareCounter, declarePercentiles, type PercentileOptions, type Percentiles, type RateOptions, rateOf } from "./blocks/counter.js";
 import { MAX_FEED_CAPACITY, PanelFeed } from "./blocks/feed.js";
-import { checkTableOptions, MAX_SEARCH_LENGTH, PanelTable } from "./blocks/table.js";
+import { availability, checkTableOptions, MAX_SEARCH_LENGTH, PanelTable } from "./blocks/table.js";
 import { ChangeLog, type ChangeLogStore, MAX_CHANGES } from "./change-log.js";
 import { AdminPanelConfigError, ValueError } from "./errors.js";
 import { ENGLISH, format, LOCALES, type MessageKey } from "./i18n/messages.js";
@@ -1203,6 +1203,23 @@ export class AdminPanel implements ValueOwner {
     if (table === undefined || action === undefined || !visible(scope, table.group)) return { ok: false, reason: "not-found", ...refusal("refuseNoRowAction", { action: actionId, table: tableId }) };
     if (!canRun(scope, table.group)) return { ok: false, reason: "not-allowed", ...refusal("refuseRunOff", { label: action.label }) };
     if (typeof rowId !== "string" || rowId === "" || rowId.length > 200) return { ok: false, reason: "invalid", ...refusal("refuseRowId") };
+    // The page draws only the actions a row offers, but what it drew may be old: the row is looked
+    // at again, as it is now, and an action it no longer offers is refused rather than run.
+    if (action.when !== undefined || action.enabledWhen !== undefined) {
+      let row: unknown;
+      try {
+        row = await table.rowFor(rowId);
+      } catch (error) {
+        this.onError(error, `finding the row for "${tableId}/${actionId}"`);
+        return { ok: false, reason: "failed", ...refusal("refuseActionFailed", { label: action.label, detail: message(error) }) };
+      }
+      if (row === undefined) return { ok: false, reason: "conflict", ...refusal("refuseRowGone", { row: rowId, table: table.label }) };
+      const state = availability(action, row);
+      if (!state.shown) return { ok: false, reason: "conflict", ...refusal("refuseRowActionUnavailable", { label: action.label, row: rowId }) };
+      if (state.disabled !== undefined) {
+        return { ok: false, reason: "conflict", ...(state.disabled === "" ? refusal("refuseRowActionDisabled", { label: action.label, row: rowId }) : refusal("refuseRowActionDisabledBecause", { label: action.label, row: rowId, reason: state.disabled })) };
+      }
+    }
     // The same checks an action's input gets, by the same code: a row action's dialog is an action's form for one row.
     let input: Record<string, JsonValue> = {};
     try {

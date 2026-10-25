@@ -22,6 +22,12 @@ let plain: AdminPanel;
 let german: AdminPanel;
 let media: AdminPanel;
 let rowsPanel: AdminPanel;
+let tablesPanel: AdminPanel;
+const accountRows = [
+  { id: "a1", name: "Ada", status: "active" },
+  { id: "a2", name: "Bo", status: "suspended" },
+  { id: "a3", name: "Cy", status: "closed" },
+];
 /** What reached the /rows listener: the method, path and the headers the page was told to send. */
 const rowsSeen: Array<{ method: string; url: string; headers: Record<string, string | undefined> }> = [];
 const roleChanges: Array<{ id: string; role: unknown }> = [];
@@ -133,6 +139,23 @@ beforeAll(async () => {
     csrf: { header: "x-csrf-token", cookie: "csrf" },
     requestHeaders: { "x-request-token": { meta: "request-token" }, "x-tenant": "acme" },
   });
+  // Tables that size to what they hold, and row actions offered on some rows: a panel of its own,
+  // so the main one keeps its look and its baselines.
+  tablesPanel = createAdminPanel({ title: "Tables" });
+  tablesPanel.table("Nothing here", { group: "Tables", columns: ["id", "name"], rows: [] });
+  tablesPanel.table("Two rows", { group: "Tables", columns: ["id", "name"], rows: [{ id: "r1", name: "one" }, { id: "r2", name: "two" }] });
+  tablesPanel.table("Small box", { group: "Tables", columns: ["id"], rows: Array.from({ length: 12 }, (_, index) => ({ id: `s${index}` })), size: { w: 4, h: 2 } });
+  tablesPanel.table("Accounts", {
+    group: "Tables",
+    columns: ["id", "name", "status"],
+    rows: () => accountRows,
+    actions: [
+      { label: "Suspend", when: { field: "status", equals: "active" }, run: (id) => `Suspended ${id}.` },
+      { label: "Reactivate", when: { field: "status", equals: "suspended" }, run: (id) => `Reactivated ${id}.` },
+      { label: "Delete", destructive: true, enabledWhen: (row) => row.status === "closed" || "close the account first", run: (id) => `Deleted ${id}.` },
+    ],
+  });
+  const tablesHandler = tablesPanel.handler({ basePath: "/tables", auth: { check: () => "tester" }, controls: { actions: true } });
   const element = (await build({ entryPoints: ["src/element/index.ts"], bundle: true, format: "esm", write: false, platform: "browser" })).outputFiles[0]?.text ?? "";
   server = createServer((request, response) => {
     const url = request.url ?? "/";
@@ -141,6 +164,7 @@ beforeAll(async () => {
     if (url.startsWith("/plain/") || url === "/plain") return plainHandler(request, response);
     if (url.startsWith("/de")) return germanHandler(request, response);
     if (url.startsWith("/media")) return mediaHandler(request, response);
+    if (url === "/tables" || url.startsWith("/tables/")) return tablesHandler(request, response);
     if (url === "/rows" || url.startsWith("/rows/")) {
       const headers = request.headers as Record<string, string | undefined>;
       rowsSeen.push({ method: request.method ?? "GET", url, headers: { "x-csrf-token": headers["x-csrf-token"], "x-request-token": headers["x-request-token"], "x-tenant": headers["x-tenant"], "x-host-token": headers["x-host-token"] } });
@@ -195,6 +219,7 @@ afterAll(async () => {
   german?.close();
   media?.close();
   rowsPanel?.close();
+  tablesPanel?.close();
 });
 
 describe("the standalone page", () => {
@@ -1207,6 +1232,71 @@ describe("row actions that ask, and the headers a page sends", () => {
     // The dialog opens under the pointer; a hovered button is a state of its own, not what is measured here.
     await page.mouse.move(0, 0);
     await page.waitForTimeout(300);
+    expect(await axe(page)).toEqual([]);
+    await page.close();
+  });
+});
+
+describe("tables sized to what they hold, and row actions on some rows", () => {
+  /** A table card on the /tables page, by its title. */
+  const card = (page: Page, title: string) => page.locator(".apb-card").filter({ has: page.getByRole("heading", { name: title, exact: true }) });
+
+  it("gives an empty table the room of a line under its search, and a short one the room of its rows", async () => {
+    const page = await open("/tables/");
+    const empty = card(page, "Nothing here");
+    await expect.poll(() => empty.locator(".apb-empty").textContent()).toMatch(/Nothing yet/);
+    const two = card(page, "Two rows");
+    await expect.poll(() => two.locator("tbody tr").count()).toBe(2);
+    // Two grid rows (72 px each, and the gap) is the floor; the old box of about ten rows was 700 px and more.
+    await expect.poll(async () => (await empty.boundingBox())?.height ?? 999).toBeLessThan(220);
+    await expect.poll(async () => (await two.boundingBox())?.height ?? 999).toBeLessThan(320);
+    expect(await empty.getByRole("searchbox").isVisible()).toBe(true);
+    // One page holds everything: no pager under it.
+    expect(await two.locator(".apb-pager").isVisible()).toBe(false);
+    await page.close();
+  });
+
+  it("keeps the search on a table given a small box, where the card shows the least", async () => {
+    const page = await open("/tables/");
+    const small = card(page, "Small box");
+    await expect.poll(() => small.getAttribute("data-detail")).toBe("brief");
+    expect(await small.getByRole("searchbox").isVisible()).toBe(true);
+    await small.getByRole("searchbox").fill("s1");
+    await expect.poll(() => small.locator("tbody tr").count()).toBe(3);
+    await page.close();
+  });
+
+  it("keeps every table's search on a phone", async () => {
+    const page = await open("/tables/", 375);
+    await expect.poll(() => page.locator(".apb-block-table").count()).toBe(4);
+    const boxes = await page.locator(".apb-block-table").getByRole("searchbox").evaluateAll((inputs) => inputs.map((input) => input.getBoundingClientRect().width));
+    expect(boxes).toHaveLength(4);
+    for (const width of boxes) expect(width).toBeGreaterThan(100);
+    await page.close();
+  });
+
+  it("draws a row action only on the rows that offer it, and a disabled one with its reason", async () => {
+    const page = await open("/tables/");
+    const accounts = card(page, "Accounts");
+    await expect.poll(() => accounts.locator("tbody tr").count()).toBe(3);
+    const buttons = async (row: string) => (await accounts.locator("tbody tr").filter({ hasText: row }).getByRole("button").allTextContents()).map((text) => text.trim());
+    expect(await buttons("Ada")).toEqual(["Suspend", "Delete"]);
+    expect(await buttons("Bo")).toEqual(["Reactivate", "Delete"]);
+    expect(await buttons("Cy")).toEqual(["Delete"]);
+    const blocked = accounts.getByRole("button", { name: "Delete: a1" });
+    expect(await blocked.isDisabled()).toBe(true);
+    expect(await blocked.getAttribute("title")).toBe("close the account first");
+    const described = await blocked.evaluate((button) => button.getAttribute("aria-describedby"));
+    expect(await page.locator(`#${described}`).textContent()).toBe("close the account first");
+    expect(await accounts.getByRole("button", { name: "Delete: a3" }).isDisabled()).toBe(false);
+    await accounts.getByRole("button", { name: "Suspend: a1" }).click();
+    await expect.poll(() => accounts.locator(".apb-result").textContent()).toMatch(/Suspended a1/);
+    await page.close();
+  });
+
+  it("passes axe with tables sized to their rows and row actions disabled with a reason", async () => {
+    const page = await open("/tables/", 1200, true);
+    await expect.poll(() => page.locator(".apb-block-table tbody tr").count()).toBeGreaterThan(5);
     expect(await axe(page)).toEqual([]);
     await page.close();
   });
