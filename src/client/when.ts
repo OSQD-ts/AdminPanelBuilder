@@ -10,7 +10,7 @@
  */
 import type { JsonValue, RepeatRuleShape, ScheduledChange } from "../types.js";
 import { el, uid } from "./dom.js";
-import { formatDuration, formatValue, type FormatSpec } from "./format.js";
+import { formatDuration, formatMoment, formatValue, type FormatSpec } from "./format.js";
 import type { Translate } from "./i18n.js";
 
 export interface When {
@@ -113,7 +113,7 @@ export function describeRule(rule: RepeatRuleShape, t: Translate): string {
 
 /** One scheduled change of a value, or of a profile when `spec` is undefined, as a sentence. */
 export function scheduledSentence(entry: ScheduledChange, spec: FormatSpec | undefined, now: number, t: Translate): string {
-  const time = new Date(entry.at).toLocaleString(t.locale);
+  const time = formatMoment(entry.at, { locale: t.locale, time: t.time });
   const until = formatDuration(Math.max(0, entry.at - now), t.locale);
   const length = entry.revertAfterMs === undefined ? "" : ` (${t("forLength", { length: formatDuration(entry.revertAfterMs, t.locale) })})`;
   const reason = entry.reason === undefined ? "" : ` ${t("reasonShown", { reason: entry.reason })}`;

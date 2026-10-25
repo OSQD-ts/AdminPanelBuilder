@@ -14,22 +14,28 @@ import { AdminPanelConfigError } from "../errors.js";
 import { withDeadline } from "../internal/async.js";
 import { checkId, slug } from "../internal/ids.js";
 import { rejectUnknown } from "../internal/options.js";
-import type { CardSize, JsonValue, Span, Status, StatusRule, TableColumn, TableOptions, TableQuery, TableRowsAnswer, TableSchema } from "../types.js";
+import type { CardSize, DateFormat, ImageOptions, JsonValue, QrOptions, Span, Status, StatusRule, TableColumn, TableOptions, TableQuery, TableRowsAnswer, TableSchema } from "../types.js";
+import { checkDisplay } from "../values/display.js";
 import { toJson } from "../values/kinds.js";
 import { checkStatusRule, statusOf } from "../values/status.js";
+import { checkVisibility } from "../actions.js";
+import { type ResolvedField, resolveInput } from "../values/input.js";
 
 /** Most rows one page may carry: a screenful several times over, and a bounded response. */
 export const MAX_PAGE_SIZE = 200;
 /** Longest search a page may send. Longer is a paste, not a search. */
 export const MAX_SEARCH_LENGTH = 200;
 const DEFAULT_TABLE_TIMEOUT_MS = 10_000;
-const COLUMN_KEYS = ["key", "label", "format", "unit", "decimals", "sortable", "status"];
+const COLUMN_KEYS = ["key", "label", "format", "dateFormat", "image", "qr", "unit", "decimals", "sortable", "status"];
 const TABLE_KEYS = ["id", "label", "description", "group", "order", "span", "size", "columns", "rows", "fetch", "rowId", "pageSize", "searchable", "actions", "timeoutMs"];
 
 export interface ResolvedColumn {
   key: string;
   label: string;
   format: TableColumn["format"];
+  dateFormat: DateFormat | undefined;
+  image: ImageOptions | undefined;
+  qr: QrOptions | undefined;
   unit: string | undefined;
   decimals: number | undefined;
   sortable: boolean;
@@ -43,6 +49,11 @@ export interface RowAction {
   confirm: boolean;
   destructive: boolean;
   timeoutMs: number;
+  /** The label is typed before it runs. */
+  typeToConfirm: boolean;
+  /** The fields it asks for, checked like an action's. */
+  input: ResolvedField[] | undefined;
+  visibility: import("../types.js").ActionVisibility | undefined;
 }
 
 export class PanelTable<Row = Record<string, unknown>> {
@@ -80,15 +91,19 @@ export class PanelTable<Row = Record<string, unknown>> {
     this.description = options.description;
     this.columns = options.columns.map((column) => resolveColumn(label, column));
     this.rowActions = (options.actions ?? []).map((action, index) => {
-      rejectUnknown(action, ["id", "label", "run", "confirm", "destructive", "timeoutMs"], `table "${label}", action ${index + 1}`);
+      rejectUnknown(action, ["id", "label", "run", "confirm", "destructive", "timeoutMs", "input", "visibility"], `table "${label}", action ${index + 1}`);
+      if (action.confirm !== undefined && typeof action.confirm !== "boolean" && action.confirm !== "type") throw new AdminPanelConfigError(`table "${label}" has a row action "${action.label}" with confirm ${JSON.stringify(action.confirm)}; it is true, false or "type"`);
       if (typeof action.run !== "function") throw new AdminPanelConfigError(`table "${label}" has a row action "${action.label}" with nothing to run`);
       return {
         id: checkId(action.id ?? (slug(action.label) || `action-${index + 1}`), `table "${label}", action "${action.label}"`),
         label: action.label,
         run: action.run,
-        confirm: action.confirm === true || action.destructive === true,
+        confirm: action.confirm === true || action.confirm === "type" || action.destructive === true,
         destructive: action.destructive === true,
         timeoutMs: action.timeoutMs ?? 30_000,
+        typeToConfirm: action.confirm === "type",
+        input: action.input === undefined ? undefined : resolveInput(`${label}: ${action.label}`, action.input),
+        visibility: checkVisibility(action.visibility, `table "${label}", row action "${action.label}": visibility`),
       };
     });
   }
@@ -102,13 +117,23 @@ export class PanelTable<Row = Record<string, unknown>> {
       columns: this.columns.map((column) => {
         const out: TableSchema["columns"][number] = { key: column.key, label: column.label, sortable: column.sortable };
         if (column.format !== undefined) out.format = column.format;
+        if (column.dateFormat !== undefined) out.dateFormat = column.dateFormat;
+        if (column.image !== undefined) out.image = column.image;
+        if (column.qr !== undefined) out.qr = column.qr;
         if (column.unit !== undefined) out.unit = column.unit;
         if (column.decimals !== undefined) out.decimals = column.decimals;
         return out;
       }),
       pageSize: this.pageSize,
       searchable: this.searchable,
-      actions: this.rowActions.map(({ id, label, confirm, destructive }) => ({ id, label, confirm, destructive })),
+      actions: this.rowActions.map(({ id, label, confirm, destructive, input, typeToConfirm }) => ({
+        id,
+        label,
+        confirm,
+        destructive,
+        ...(input === undefined || input.length === 0 ? {} : { input: input.map((field) => field.schema) }),
+        ...(typeToConfirm ? { typeToConfirm } : {}),
+      })),
       runnable: runnable && this.rowActions.length > 0,
     };
     if (this.description !== undefined) schema.description = this.description;
@@ -182,10 +207,14 @@ function resolveColumn(table: string, column: TableColumn | string): ResolvedCol
   const spec: TableColumn = typeof column === "string" ? { key: column } : column;
   rejectUnknown(spec, COLUMN_KEYS, `table "${table}", column "${spec.key}"`);
   if (typeof spec.key !== "string" || spec.key === "") throw new AdminPanelConfigError(`table "${table}" has a column without a key`);
+  const display = checkDisplay(`table "${table}", column "${spec.key}"`, spec);
   return {
     key: spec.key,
     label: spec.label ?? spec.key,
-    format: spec.format,
+    format: display.format,
+    dateFormat: display.dateFormat,
+    image: display.image,
+    qr: display.qr,
     unit: spec.unit,
     decimals: spec.decimals,
     sortable: spec.sortable !== false,

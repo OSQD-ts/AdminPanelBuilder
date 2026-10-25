@@ -9,6 +9,9 @@
  * in the source — including one inside a string literal a player chose as their name.
  */
 import { CLIENT_EXTRAS, CLIENT_SCRIPT } from "../client.generated.js";
+import { usesExtras } from "../panel/extras.js";
+
+export { usesExtras };
 import { scopedThemeStylesheet, themeStylesheet } from "../themes/define.js";
 import type { Theme } from "../themes/types.js";
 import type { PanelSchema, PanelState } from "../types.js";
@@ -20,10 +23,7 @@ export interface Bootstrap {
   state: PanelState;
 }
 
-/** Whether a schema draws charts or tables, whose code is a second bundle. See src/client/registry.ts. */
-export function usesExtras(schema: PanelSchema): boolean {
-  return schema.groups.some((group) => group.items.some((item) => item.type === "chart" || item.type === "table"));
-}
+
 
 /**
  * Theme preamble, the other themes a viewer may choose (scoped to `data-theme`), the component

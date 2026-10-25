@@ -12,9 +12,10 @@ import type { ActionSchema, ChartSchema, ItemSchema, PendingChange, ProfileSchem
 import { buildInputs, confirmingButton } from "./blocks.js";
 import { busy, clear, el, flash, uid } from "./dom.js";
 import { buildEditor } from "./editors.js";
-import { type FormatSpec, formatAgo, formatDuration, formatNumber, formatValue } from "./format.js";
+import { type FormatSpec, formatAgo, formatClock, formatDuration, formatMoment, formatNumber, formatValue } from "./format.js";
 import { explain, said } from "./explain.js";
 import { localeSpec, type Translate } from "./i18n.js";
+import { drawImage } from "./media.js";
 import type { Prefs } from "./prefs.js";
 import { extras } from "./registry.js";
 import { describeRule, reasonField, scheduledSentence, whenField } from "./when.js";
@@ -173,6 +174,19 @@ export function valueCard(host: CardHost, schema: ValueSchema): Card {
     } else if (wire.text !== undefined) {
       value.textContent = said(t, wire.textKey, wire.textParams, wire.text);
       value.classList.add("apb-value-empty");
+    } else if ((schema.format === "image" || schema.format === "qr") && typeof wire.value === "string" && wire.value !== "") {
+      // A picture or a code is redrawn only when its string changes, not on every poll.
+      if (wire.value !== shownText) {
+        value.replaceChildren(
+          schema.format === "image"
+            ? drawImage(wire.value, schema.image ?? { alt: schema.label }, t)
+            : // The QR drawing lives in the extras bundle, which every panel with a QR value loads (needsExtras).
+              (extras().drawQr?.(wire.value, schema.qr, t) ?? el("span", "apb-qr-text", wire.value)),
+        );
+        if (shownText !== undefined && wire.error === undefined) flash(value);
+      }
+      value.classList.add("apb-value-media");
+      shownText = wire.value;
     } else {
       value.textContent = formatValue(wire.value, spec);
       // Nothing set, and nothing to draw for it: a line of no height reads as a card half built, so
@@ -183,22 +197,26 @@ export function valueCard(host: CardHost, schema: ValueSchema): Card {
         value.setAttribute("aria-label", t("noValue"));
       } else value.removeAttribute("aria-label");
     }
-    const text = value.textContent ?? "";
-    if (shownText !== undefined && text !== shownText && wire.error === undefined) flash(value);
+    const media = value.classList.contains("apb-value-media");
+    const text = media ? (shownText ?? "") : (value.textContent ?? "");
+    if (!media && shownText !== undefined && text !== shownText && wire.error === undefined) flash(value);
     shownText = text;
     // A reading long enough to be words rather than a figure says so, and is set at a size meant for
     // reading: a sentence drawn as a display number is a wall, however much room the card has.
-    if (text.length > 40) value.dataset.long = "sentence";
+    if (media) delete value.dataset.long;
+    else if (text.length > 40) value.dataset.long = "sentence";
     else if (text.length > 16) value.dataset.long = "words";
     else delete value.dataset.long;
     if (wire.status !== undefined) {
       card.element.dataset.status = wire.status;
       status.textContent = t(wire.status === "bad" ? "statusBad" : wire.status === "warn" ? "statusWarn" : "statusOk");
     }
-    if (wire.revertAt !== undefined) revert.textContent = t("revertsAt", { value: wire.revertTo === undefined ? "…" : formatValue(wire.revertTo, spec), time: new Date(wire.revertAt).toLocaleTimeString(t.locale) });
-    if (schema.live) meta.textContent = deps.snapshot ? t("readAtSnapshot") : t("readEveryRefresh");
+    if (wire.revertAt !== undefined) revert.textContent = t("revertsAt", { value: wire.revertTo === undefined ? "…" : formatValue(wire.revertTo, spec), time: formatClock(wire.revertAt, { locale: t.locale, time: t.time }) });
+    // How a live value is read is the same on most cards, so it is said only for a viewer who asks.
+    if (schema.live) meta.textContent = deps.prefs.freshness ? (deps.snapshot ? t("readAtSnapshot") : t("readEveryRefresh")) : "";
     else if (wire.version === 0) meta.textContent = t("unchanged");
-    else meta.textContent = `${t("changedAgo", { ago: formatAgo(wire.at, now, t.locale) })}${wire.by === undefined ? "" : wire.by === "store" ? `, ${t("restored")}` : ` ${t("changedBy", { by: wire.by })}`}.`;
+    else meta.textContent = `${t("changedAgo", { ago: formatAgo(wire.at, now, t.locale, t.time) })}${wire.by === undefined ? "" : wire.by === "store" ? `, ${t("restored")}` : ` ${t("changedBy", { by: wire.by })}`}.`;
+    meta.hidden = meta.textContent === "";
   };
 
   const editor =
@@ -214,7 +232,7 @@ export function valueCard(host: CardHost, schema: ValueSchema): Card {
               host.store().values.set(answer.value.id, answer.value);
               show(answer.value, serverTime(host.store()));
               if (change.repeat !== undefined) return describeRule(change.repeat, t);
-              if (change.at !== undefined) return t("scheduledNote", { time: new Date(change.at).toLocaleString(t.locale) });
+              if (change.at !== undefined) return t("scheduledNote", { time: formatMoment(change.at, { locale: t.locale, time: t.time }) });
             }
             return undefined;
           },
@@ -311,7 +329,7 @@ export function valueCard(host: CardHost, schema: ValueSchema): Card {
         clear(timelineList);
         for (const entry of [...recent].reverse()) {
           const item = el("li");
-          const time = el("time", null, formatAgo(entry.at, now, t.locale));
+          const time = el("time", null, formatAgo(entry.at, now, t.locale, t.time));
           time.dateTime = new Date(entry.at).toISOString();
           item.append(el("span", "apb-timeline-value", formatValue(entry.value, spec)), document.createTextNode(" · "), time, ...(entry.by === undefined ? [] : [document.createTextNode(` · ${entry.by}`)]));
           timelineList.append(item);
@@ -339,7 +357,7 @@ export function scheduledRow(host: CardHost, entry: ScheduledChange, label: stri
         result.textContent = explain(problem, t);
       }
     });
-    cancel.setAttribute("aria-label", `${t("cancelScheduled")}: ${label}, ${new Date(entry.at).toLocaleString(t.locale)}`);
+    cancel.setAttribute("aria-label", `${t("cancelScheduled")}: ${label}, ${formatMoment(entry.at, { locale: t.locale, time: t.time })}`);
     row.append(cancel, result);
   }
   return row;
@@ -499,7 +517,7 @@ export function profileCard(host: CardHost, schema: ProfileSchema): Card {
       const when = later?.read() ?? {};
       const answer = await api.applyProfile(schema.id, { ...when, reason: why, revertAfterMs: duration?.read() });
       result.dataset.ok = "true";
-      result.textContent = answer.pending !== undefined ? t("proposed") : when.repeat !== undefined ? describeRule(when.repeat, t) : when.at !== undefined ? t("scheduledNote", { time: new Date(when.at).toLocaleString(t.locale) }) : "";
+      result.textContent = answer.pending !== undefined ? t("proposed") : when.repeat !== undefined ? describeRule(when.repeat, t) : when.at !== undefined ? t("scheduledNote", { time: formatMoment(when.at, { locale: t.locale, time: t.time }) }) : "";
       reason?.clear();
       later?.clear();
       deps.refresh();

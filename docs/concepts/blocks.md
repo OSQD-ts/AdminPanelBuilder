@@ -35,7 +35,23 @@ panel.table("Queued mail", {
   with a word and a colour, like a value's.
 - **Row actions** get the row's id (the `rowId` property, default `"id"`) and the operator's name, are
   gated by `controls.actions` for the table's group, have a deadline, and are recorded as
-  "End (Games: g12)".
+  "End (Games: g12)". Like an action, a row action may ask for `input`, checked by the same rules, in a
+  dialog the row's button opens — changing one user's role needs no separate form:
+
+  ```ts
+  panel.table("Users", {
+    columns: ["id", "role"],
+    rows: () => users.list(),
+    actions: [{
+      label: "Change role",
+      input: { role: { kind: "enum", options: ["viewer", "editor", "admin"] } },
+      run: (id, { input, by }) => users.setRole(id, input.role, by),
+    }],
+  });
+  ```
+
+  `confirm: "type"` asks for the label to be typed in that dialog, and `visibility` says who reads the
+  result, as for [an action](actions.md#who-reads-the-result).
 - **The page refetches a table only when something changed** and only while its tab is showing: a
   `fetch` may be a database query, and a poll a second per viewer would be a query a second per viewer.
 

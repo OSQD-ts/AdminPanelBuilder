@@ -7,10 +7,12 @@
  */
 import type { TableRowsAnswer, TableSchema } from "../types.js";
 import type { Api } from "./api.js";
-import { confirmingButton } from "./blocks.js";
-import { clear, el } from "./dom.js";
+import { buildInputs, confirmingButton } from "./blocks.js";
+import { busy, clear, el, uid } from "./dom.js";
 import { formatValue } from "./format.js";
 import { localeSpec } from "./i18n.js";
+import { drawImage } from "./media.js";
+import { drawQr } from "./qr-view.js";
 import { explain } from "./explain.js";
 import type { Translate } from "./i18n.js";
 
@@ -125,7 +127,10 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
       const tr = el("tr");
       for (const column of schema.columns) {
         const value = row.cells[column.key] ?? null;
-        const td = el("td", numeric.has(column.key) ? "apb-num" : null, formatValue(value, { format: column.format, unit: column.unit, decimals: column.decimals, ...localeSpec(t) }));
+        const media = (column.format === "image" || column.format === "qr") && typeof value === "string" && value !== "";
+        const td = el("td", numeric.has(column.key) ? "apb-num" : media ? "apb-media-cell" : null, media ? null : formatValue(value, { format: column.format, dateFormat: column.dateFormat, unit: column.unit, decimals: column.decimals, ...localeSpec(t) }));
+        // Pictures and codes as thumbnails; the text of a code is its accessible name.
+        if (media) td.append(column.format === "image" ? drawImage(value, column.image ?? { alt: column.label }, t, true) : drawQr(value, column.qr, t, true));
         // Read by the stylesheet on narrow screens, where each row becomes a card of labelled lines.
         td.dataset.label = column.label;
         const flagged = row.status?.[column.key];
@@ -140,18 +145,25 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
         const td = el("td", "apb-row-actions");
         td.dataset.label = "";
         for (const action of schema.actions) {
-          const button = confirmingButton(action.label, action.confirm, action.destructive ? "apb-tool apb-tool-destructive" : "apb-tool", t, async () => {
-            if (api === undefined) return;
-            try {
-              const said = await api.runRow(schema.id, action.id, row.id);
-              message.dataset.ok = "true";
-              message.textContent = said;
-              load();
-            } catch (problem) {
-              message.dataset.ok = "false";
-              message.textContent = explain(problem, t);
-            }
-          });
+          const className = action.destructive ? "apb-tool apb-tool-destructive" : "apb-tool";
+          const done = (said: string): void => {
+            message.dataset.ok = "true";
+            message.textContent = said;
+            load();
+          };
+          // Input to fill in, or a label to type: a dialog for this row. Otherwise the button itself, as always.
+          const asks = (action.input !== undefined && action.input.length > 0) || action.typeToConfirm === true;
+          const button = asks
+            ? rowDialogButton(schema, action, row.id, className, api, t, done, wrap)
+            : confirmingButton(action.label, action.confirm, className, t, async () => {
+                if (api === undefined) return;
+                try {
+                  done(await api.runRow(schema.id, action.id, row.id));
+                } catch (problem) {
+                  message.dataset.ok = "false";
+                  message.textContent = explain(problem, t);
+                }
+              });
           button.disabled = !schema.runnable;
           button.setAttribute("aria-label", `${action.label}: ${row.id}`);
           td.append(button);
@@ -189,3 +201,87 @@ export function buildTable(schema: TableSchema, api: Api | undefined, t: Transla
   return { element: wrap, refresh: load };
 }
 
+
+/**
+ * A row action that asks for something before it runs: a button that opens a dialog for the row,
+ * with the action's fields (drawn and read as an action card's are) and, for one declared
+ * `confirm: "type"`, its label to type. The server checks the input the way it checks an action's.
+ */
+function rowDialogButton(schema: TableSchema, action: TableSchema["actions"][number], rowId: string, className: string, api: Api | undefined, t: Translate, done: (said: string) => void, host: HTMLElement): HTMLButtonElement {
+  const open = el("button", className, action.label);
+  open.type = "button";
+  open.setAttribute("aria-haspopup", "dialog");
+  open.addEventListener("click", () => {
+    const dialog = el("dialog", "apb-dialog apb-row-dialog");
+    const titleId = uid("row-dialog");
+    dialog.setAttribute("aria-labelledby", titleId);
+    const head = el("div", "apb-dialog-head");
+    const heading = el("h2", "apb-label", `${action.label}: ${rowId}`);
+    heading.id = titleId;
+    const close = el("button", "apb-icon", "×");
+    close.type = "button";
+    close.setAttribute("aria-label", t("close"));
+    close.addEventListener("click", () => dialog.close());
+    head.append(heading, close);
+    const body = el("div", "apb-dialog-body");
+    const inputs = buildInputs(action, t);
+    if (inputs !== undefined) body.append(inputs.element);
+    let typed: HTMLInputElement | undefined;
+    if (action.typeToConfirm === true) {
+      const id = uid("type");
+      const label = el("label", "apb-input-label", t("typeToConfirm", { label: action.label }));
+      label.htmlFor = id;
+      typed = el("input", "apb-input");
+      typed.id = id;
+      typed.autocomplete = "off";
+      typed.spellcheck = false;
+      body.append(label, typed);
+    }
+    const result = el("p", "apb-result");
+    result.setAttribute("aria-live", "polite");
+    const foot = el("div", "apb-settings-foot");
+    const cancel = el("button", "apb-button apb-button-quiet", t("close"));
+    cancel.type = "button";
+    cancel.addEventListener("click", () => dialog.close());
+    const submitClass = action.destructive ? "apb-button apb-button-destructive" : "apb-button";
+    const run = async (): Promise<void> => {
+      if (api === undefined) return;
+      try {
+        const said = await api.runRow(schema.id, action.id, rowId, inputs?.read());
+        dialog.close();
+        done(said);
+      } catch (problem) {
+        result.dataset.ok = "false";
+        result.textContent = explain(problem, t);
+      }
+    };
+    // A typed label is the confirmation; otherwise a declared confirm still asks for the second click.
+    const submit = typed === undefined ? confirmingButton(action.label, action.confirm, submitClass, t, run) : el("button", submitClass, action.label);
+    if (typed !== undefined) {
+      const field = typed;
+      submit.type = "button";
+      submit.disabled = true;
+      field.addEventListener("input", () => {
+        submit.disabled = field.value.trim() !== action.label;
+      });
+      submit.addEventListener("click", () => {
+        if (field.value.trim() !== action.label) return;
+        submit.disabled = true;
+        void busy(submit, run()).finally(() => {
+          submit.disabled = field.value.trim() !== action.label;
+        });
+      });
+    }
+    foot.append(cancel, submit);
+    body.append(result);
+    dialog.append(head, body, foot);
+    // Gone once closed: a dialog per opening, so nothing typed for one row is offered for the next.
+    dialog.addEventListener("close", () => {
+      dialog.remove();
+      if (open.isConnected) open.focus();
+    });
+    host.append(dialog);
+    dialog.showModal();
+  });
+  return open;
+}

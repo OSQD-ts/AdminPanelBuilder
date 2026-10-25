@@ -5,6 +5,7 @@
 // English only: another language arrives with the schema (`translations`) or from the handler, so a
 // page carries one language's words, not every language the package ships.
 import { ENGLISH, format, type MessageKey } from "../i18n/messages.js";
+import type { TimeSpec } from "./format.js";
 
 /**
  * The page's words. `locale` and `has` are part of it, not extras: a translator that forwards the
@@ -15,18 +16,34 @@ export type Translate = ((key: MessageKey, values?: Record<string, string | numb
   readonly locale: string | undefined;
   /** Whether the table has this key: a refusal the server keyed may name one this page predates. */
   readonly has: (key: string) => boolean;
+  /** How this page writes times: the panel's settings under the viewer's own. Absent: the browser's. */
+  readonly time?: TimeSpec | undefined;
 };
 
-export function translator(schema: { locale: string; messages?: Record<string, string> | undefined; translations?: Record<string, string> | undefined }): Translate {
+export function translator(schema: { locale: string; messages?: Record<string, string> | undefined; translations?: Record<string, string> | undefined }, time?: TimeSpec): Translate {
   const table: Record<string, string> = { ...ENGLISH, ...(schema.translations ?? {}), ...(schema.messages ?? {}) };
-  return Object.assign((key: MessageKey, values?: Record<string, string | number>) => format(table[key] ?? ENGLISH[key], values), { locale: schema.locale, has: (key: string) => Object.hasOwn(table, key) });
+  return Object.assign((key: MessageKey, values?: Record<string, string | number>) => format(table[key] ?? ENGLISH[key], values), { locale: schema.locale, has: (key: string) => Object.hasOwn(table, key), time });
 }
 
 export { explain } from "./explain.js";
 
 /** The part of a format spec that comes from the page's language: its separators and its On/Off. */
-export function localeSpec(t: Translate): { locale: string | undefined; on: string; off: string } {
-  return { locale: t.locale, on: t("on"), off: t("off") };
+export function localeSpec(t: Translate): { locale: string | undefined; on: string; off: string; time: TimeSpec | undefined } {
+  return { locale: t.locale, on: t("on"), off: t("off"), time: t.time };
+}
+
+/**
+ * The time settings in effect: the viewer's zone and format over the panel's. A viewer choosing
+ * "browser" drops the panel's zone; "UTC" is UTC whatever the panel says.
+ */
+export function timeFor(panel: { timeZone?: string; dateFormat?: TimeSpec["dateFormat"]; dateLocale?: string } | undefined, viewer: { timeZone: "browser" | "UTC" | undefined; dateFormat: string | undefined }): TimeSpec {
+  const spec: TimeSpec = {};
+  const zone = viewer.timeZone === "UTC" ? "UTC" : viewer.timeZone === "browser" ? undefined : panel?.timeZone;
+  if (zone !== undefined) spec.timeZone = zone;
+  const shape = viewer.dateFormat ?? panel?.dateFormat;
+  if (shape !== undefined) spec.dateFormat = shape as TimeSpec["dateFormat"];
+  if (panel?.dateLocale !== undefined) spec.dateLocale = panel.dateLocale;
+  return spec;
 }
 
 /**

@@ -63,6 +63,26 @@ scheme; `group` and `compact` work as for a fragment. The entry is safe to impor
 **A shadow root is a styling boundary, not a security boundary.** Scripts on the host page can read
 everything inside it. Embed a panel only in a page you would trust with what it shows.
 
+### Request headers
+
+A host page that guards its own routes with a header — an anti-forgery token, a gateway key — hands it to
+the element, and every request the panel makes carries it:
+
+```js
+const panel = document.querySelector("admin-panel");
+panel.headers = () => ({ "x-csrf-token": document.querySelector('meta[name="csrf-token"]').content });
+// or a fixed object: panel.headers = { "x-tenant": "acme" };
+```
+
+A function is asked before each request, so a rotating token is sent as it is now; the property may be set
+before the element is defined or connected. It adds to the listener's own `requestHeaders`, which the
+panel reads from the host page's cookies or `<meta>` tags itself, so for the common case — a token in a
+`<meta>` or a readable cookie — configuring the handler is enough and the page needs no script at all:
+see [Security](../operations/security.md#headers-the-page-sends). A name a page cannot set (`Cookie`,
+`Host`, `Origin`…) is dropped with a console warning. The schema and state are first fetched before the
+listener's sources are known, so a header the panel cannot load without belongs on the element. The live
+stream cannot carry headers; where it is refused without one, the panel polls.
+
 ## Related
 
 - [Themes](../operations/themes.md) — the panel styles only itself; nothing leaks into the host page.

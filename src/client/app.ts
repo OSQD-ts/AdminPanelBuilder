@@ -15,7 +15,9 @@ import type { PanelSchema, PanelState } from "../types.js";
 import { Api, ApiError } from "./api.js";
 import type { Root } from "./dom.js";
 import { explain } from "./explain.js";
-import { chooseLocale, type Translate, translator } from "./i18n.js";
+import { headerResolver, type HostHeaders } from "./headers.js";
+import { formatTime } from "./format.js";
+import { chooseLocale, timeFor, type Translate, translator } from "./i18n.js";
 import { loadPrefs, type Prefs } from "./prefs.js";
 import { extras, loadExtras, needsExtras } from "./registry.js";
 import { View, type ViewDeps } from "./render.js";
@@ -32,6 +34,8 @@ export interface MountOptions {
   group?: string | undefined;
   /** Only the groups: no heading, status line or activity. */
   compact?: boolean | undefined;
+  /** Headers the host page adds to every request: `<admin-panel>`'s `headers` property. */
+  headers?: (() => HostHeaders | undefined) | undefined;
 }
 
 export interface MountedPanel {
@@ -42,10 +46,13 @@ export interface MountedPanel {
 const MAX_BACKOFF_MS = 30_000;
 
 export function mount(options: MountOptions): MountedPanel {
-  const api = options.api === undefined ? undefined : new Api(options.api);
   let store: Store | undefined;
+  // The listener's sources come with the schema: the bootstrap's on a rendered page, otherwise the first one fetched.
+  const headers = headerResolver(options.container.ownerDocument, () => store?.schema.requestHeaders ?? options.bootstrap?.schema.requestHeaders, () => options.headers?.());
+  const api = options.api === undefined ? undefined : new Api(options.api, headers);
   let view: View | undefined;
   let t: Translate = translator({ locale: "en" });
+  let retranslate: (() => Translate) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let source: EventSource | undefined;
   let streamWorks = false;
@@ -90,7 +97,9 @@ export function mount(options: MountOptions): MountedPanel {
     const language = wanted === schema.locale || wanted === "en" || (fetched !== undefined && Object.keys(fetched).length > 0) ? wanted : schema.locale === "auto" ? "en" : schema.locale;
     const translations = language === "en" ? undefined : language === schema.locale ? schema.translations : languages.get(language);
     container.lang = language;
-    t = translator({ locale: language, messages: schema.messages, translations });
+    // Kept, so a viewer choosing another zone or date format redraws in it without fetching anything.
+    retranslate = () => translator({ locale: language, messages: schema.messages, translations }, timeFor(schema.time, prefsFor(schema)));
+    t = retranslate();
     store = createStore(schema, state);
     deps ??= {
       root: options.root,
@@ -115,12 +124,17 @@ export function mount(options: MountOptions): MountedPanel {
       // Everything the view is handed reads through this, so a language chosen later reaches every
       // card without rebuilding the deps: the call, the locale, and — LOAD-BEARING — `has`, which is
       // how a keyed refusal or notice is recognised as one this page can say in its own words.
-      t: Object.assign((key: Parameters<Translate>[0], values?: Parameters<Translate>[1]) => t(key, values), {
-        get locale() {
-          return t.locale;
-        },
-        has: (key: string) => t.has(key),
-      }),
+      // Real getters, not Object.assign: assign copies a getter's value once, which froze the locale
+      // and the time settings at whatever the first drawing had.
+      t: Object.defineProperties((key: Parameters<Translate>[0], values?: Parameters<Translate>[1]) => t(key, values), {
+        locale: { get: () => t.locale, enumerable: true },
+        time: { get: () => t.time, enumerable: true },
+        has: { value: (key: string) => t.has(key), enumerable: true },
+      }) as Translate,
+      redraw: () => {
+        if (retranslate !== undefined) t = retranslate();
+        view?.redraw();
+      },
       refresh: () => schedule(0),
       loadActivity:
         api === undefined
@@ -139,7 +153,7 @@ export function mount(options: MountOptions): MountedPanel {
     view ??= new View(current, store);
     view.build(store);
     view.update();
-    if (api === undefined) view.setStatus(t("snapshot", { time: new Date(state.now).toLocaleString() }), "snapshot");
+    if (api === undefined) view.setStatus(t("snapshot", { time: formatTime(state.now, { locale: t.locale, time: t.time }) }), "snapshot");
   };
 
   /** Applies one state delta, from a poll or a stream frame. Returns false when the structure changed and a reload is needed. */

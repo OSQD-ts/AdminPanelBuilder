@@ -8,6 +8,39 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Times in a zone and a shape you choose.** `createAdminPanel({ timeZone, dateFormat, dateLocale })`
+  writes every timestamp on the page — cards, tables, chart axes and tips, Activity, feeds, scheduled
+  changes — in that IANA zone and shape (`"relative"`, `"date"`, `"time"`, `"datetime"`,
+  `"datetime-seconds"`, `"iso"` or `Intl.DateTimeFormat` options). A value or a column may set its own
+  `dateFormat`, and each viewer may choose their browser's zone or UTC, and another shape, in Settings.
+  An unknown zone, format or locale is refused when the panel is made.
+- **Pictures and QR codes.** `format: "image"` (with required `image: { alt }`) draws a string as a
+  picture — http(s), a path on this origin or a `data:image/…` URI, never `javascript:` — and
+  `format: "qr"` draws it as a QR code the page encodes itself, with the text and a copy button beside
+  it; both as thumbnails in tables. The listener's `imageSources` adds picture origins to the page's
+  `img-src`. New limits: `MIN_IMAGE_HEIGHT`, `MAX_IMAGE_HEIGHT`, `MAX_ALT_LENGTH`, `MAX_QR_VERSION`,
+  `MAX_QR_BYTES`.
+
+- **Headers on every request the page makes.** `requestHeaders` lists them, each a fixed value, a cookie
+  of the host page or the `content` of a `<meta name>` in it, read when each request is sent; the
+  `<admin-panel>` element's `headers` property (an object, or a function asked before every request)
+  adds the host page's own. Names a browser will not let a page set are refused when the listener
+  starts. The typed client, a remote panel (`upstreamHeaders`) and a fleet's panels (`headers`) take
+  fixed headers for a gateway in front of a panel.
+- **An anti-forgery check for writes**, `csrf: { header, cookie }` (double submit: the page reads the
+  cookie and sends it back) or `csrf: { header, verify }` (your own), so a host application's token needs
+  no workaround. A write with a bearer token is exempt, and so are sign-in paths.
+- **`allowedOrigins` and `trustedProxies`.** A write's origin is compared with exactly the allowed
+  origins when they are set, or with the host and scheme a trusted proxy forwarded (`X-Forwarded-Host`,
+  `X-Forwarded-Proto`, believed only from those addresses), so a panel behind a proxy that rewrites
+  `Host` accepts writes from its own page. Both are in the listener file as `[listen] allowed_origins`
+  and `trusted_proxies`, and reload without a restart. The refusal names the origin it got, the one it
+  expected and the options to set. The ranges are matched by bothandlerjs's `ip.ts`, copied byte for byte.
+- **Row actions take input**, the same fields an action takes and checked by the same rules, filled in a
+  dialog the row's button opens, and `confirm: "type"`; the input reaches `run(rowId, { input })` and is
+  recorded with the run. `runRowAction(table, action, row, input?)` in the typed client.
+- **Who reads an action's result.** `visibility: "self" | "runners" | "everyone"` on an action or a row
+  action, and `actionVisibility` on the panel for the rest.
 - **Values declared where they live.** `viewable()`, `modifiable()` and `bind()` return a handle the
   panel observes; a value can hold its own state, be read from a function on every look, or be a
   property of an object the application already keeps, so a panel can be added to a codebase without
@@ -299,3 +332,25 @@ All notable changes to this project are documented here. The format follows
   the kit's series palette as chart slots. They are not built in, so the default list and its screenshots
   are unchanged; they pass the same contrast checks, and a test compares the copied palettes with the kit
   when it sits beside this folder.
+
+### Changed
+
+- **"Read on every refresh" is no longer on every live card.** It said the same thing on most cards and
+  crowded the reading; a viewer who wants it turns on "Say how each value is read" in Settings.
+- **A `format` the page does not write is refused at declaration** instead of being shown plain.
+
+- **An action's result is private to whoever ran it, by default.** `/api/changes` (and so the Activity
+  list, the typed client and the command line) now leaves out an action's `outcome` and `to` for every
+  operator it does not belong to, marking the record `resultPrivate`; that the action ran, by whom, when
+  and whether it worked is still listed for everybody who sees its group. An approved run belongs to the
+  proposer and the approver. To keep every result readable by everybody, as before, set
+  `createAdminPanel({ actionVisibility: "everyone" })`, or `visibility: "everyone"` on one action. Code,
+  the change log and its audit sinks keep the full records.
+- **A refused cross-site write says why**: `refuseCrossSite` now carries `origin` and `expected`, and its
+  sentence names `allowedOrigins` and `trustedProxies`. A remote panel refuses an unreadable `Origin`
+  with a 403, where it failed with a 502.
+
+### Fixed
+
+- The page's words object copied its `locale` once, so a viewer's later choices of language could leave
+  numbers and dates in the first one; it now reads the current language and time settings.

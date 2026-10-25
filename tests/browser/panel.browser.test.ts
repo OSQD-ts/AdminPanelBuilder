@@ -20,6 +20,11 @@ let browser: Browser;
 let panel: AdminPanel;
 let plain: AdminPanel;
 let german: AdminPanel;
+let media: AdminPanel;
+let rowsPanel: AdminPanel;
+/** What reached the /rows listener: the method, path and the headers the page was told to send. */
+const rowsSeen: Array<{ method: string; url: string; headers: Record<string, string | undefined> }> = [];
+const roleChanges: Array<{ id: string; role: unknown }> = [];
 let load: { value: number };
 let players: { value: number };
 const requested: string[] = [];
@@ -99,6 +104,35 @@ beforeAll(async () => {
   german.action("Neu starten", () => "fertig", { group: "Spiel" });
   const germanHandler = german.handler({ basePath: "/de", auth: { check: () => "tester" }, controls: { edit: true } });
   const handler = panel.handler({ basePath: "/admin", auth: { check: (request) => (request.headers["x-user"] === "second" ? "reviewer" : "tester") }, controls: { edit: true, actions: true } });
+  // Pictures, QR codes and times: a panel of its own, so the main one keeps its look and its baselines.
+  media = createAdminPanel({ title: "Media", timeZone: "Australia/Eucla", dateLocale: "en-GB" });
+  media.viewable(Date.UTC(2026, 9, 25, 12, 0, 5), { label: "Last deploy", group: "Media", format: "timestamp", dateFormat: "iso" });
+  media.viewable(Date.UTC(2026, 9, 25, 12, 0, 5), { label: "Started", group: "Media", format: "timestamp" });
+  media.viewable("otpauth://totp/ACME:ops@example.com?secret=JBSWY3DPEHPK3PXP", { label: "Pairing code", group: "Media", format: "qr" });
+  media.viewable("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", { label: "Logo", group: "Media", format: "image", image: { alt: "Company logo", height: 48 } });
+  media.viewable("javascript:alert(1)", { label: "Bad picture", group: "Media", format: "image", image: { alt: "Never loaded" } });
+  media.viewable(() => 7, { label: "Queue depth", group: "Media" });
+  media.table("Devices", { group: "Media", columns: ["name", { key: "pairing", format: "qr" }, { key: "seen", format: "timestamp", dateFormat: "date" }], rows: [{ name: "kiosk", pairing: "kiosk-01", seen: Date.UTC(2026, 9, 24, 23, 30) }] });
+  const mediaHandler = media.handler({ basePath: "/media" });
+  // Row actions that ask for input, and a listener whose writes need an anti-forgery token and whose page sends headers.
+  rowsPanel = createAdminPanel({ title: "Rows" });
+  rowsPanel.table("Users", {
+    group: "Users",
+    columns: ["id", "role"],
+    rows: [{ id: "kim", role: "viewer" }],
+    actions: [
+      { label: "Change role", input: { role: { kind: "enum", options: ["viewer", "editor"] }, note: { optional: true, maxLength: 20 } }, run: (id, { input }) => (roleChanges.push({ id, role: input.role }), `${id} is now ${String(input.role)}.`) },
+      { label: "Remove", confirm: "type", destructive: true, run: (id) => `Removed ${id}.` },
+      { label: "Ping", run: (id) => `Pinged ${id}.` },
+    ],
+  });
+  const rowsHandler = rowsPanel.handler({
+    basePath: "/rows",
+    auth: { check: () => "tester" },
+    controls: { actions: true },
+    csrf: { header: "x-csrf-token", cookie: "csrf" },
+    requestHeaders: { "x-request-token": { meta: "request-token" }, "x-tenant": "acme" },
+  });
   const element = (await build({ entryPoints: ["src/element/index.ts"], bundle: true, format: "esm", write: false, platform: "browser" })).outputFiles[0]?.text ?? "";
   server = createServer((request, response) => {
     const url = request.url ?? "/";
@@ -106,9 +140,20 @@ beforeAll(async () => {
     if (url.startsWith("/admin")) return handler(request, response);
     if (url.startsWith("/plain/") || url === "/plain") return plainHandler(request, response);
     if (url.startsWith("/de")) return germanHandler(request, response);
+    if (url.startsWith("/media")) return mediaHandler(request, response);
+    if (url === "/rows" || url.startsWith("/rows/")) {
+      const headers = request.headers as Record<string, string | undefined>;
+      rowsSeen.push({ method: request.method ?? "GET", url, headers: { "x-csrf-token": headers["x-csrf-token"], "x-request-token": headers["x-request-token"], "x-tenant": headers["x-tenant"], "x-host-token": headers["x-host-token"] } });
+      return rowsHandler(request, response);
+    }
     if (url === "/element.js") {
       response.writeHead(200, { "content-type": "text/javascript" });
       return response.end(element);
+    }
+    if (url === "/rows-boot.js") {
+      response.writeHead(200, { "content-type": "text/javascript" });
+      // Set before the element is defined: the property must survive the upgrade.
+      return response.end('document.querySelector("admin-panel").headers = () => ({ "x-host-token": "h-1" }); import("/element.js").then((m) => m.defineAdminPanelElement());');
     }
     if (url === "/boot.js") {
       response.writeHead(200, { "content-type": "text/javascript" });
@@ -119,13 +164,17 @@ beforeAll(async () => {
         ? '<main><h1>Host</h1><admin-panel src="/admin"></admin-panel></main><script type="module" src="/boot.js"></script>'
         : url === "/element-compact"
           ? '<main><h1>Host</h1><admin-panel src="/admin" group="Later" compact></admin-panel></main><script type="module" src="/boot.js"></script>'
+          : url === "/rows-host"
+            ? `<main><h1>Host</h1>${rowsPanel.html({ api: "/rows" })}</main>`
+          : url === "/rows-element"
+            ? '<main><h1>Host</h1><admin-panel src="/rows"></admin-panel></main><script type="module" src="/rows-boot.js"></script>'
           : url === "/plain-host"
             ? `<main><h1>Host</h1>${plain.html({ api: "/plain" })}</main>`
             : url === "/two"
               ? `<main><h1>Host</h1>${panel.html({ api: "/admin", script: false, group: "Game", compact: true })}${plain.html({ api: "/plain", script: false })}<script src="/plain/client.js" defer></script></main>`
               : `<main><h1>Host</h1>${panel.html({ api: "/admin" })}</main>`;
     response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'self'" });
-    response.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Host</title></head><body>${body}</body></html>`);
+    response.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="request-token" content="m-123"><title>Host</title></head><body>${body}</body></html>`);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -144,6 +193,8 @@ afterAll(async () => {
   panel?.close();
   plain?.close();
   german?.close();
+  media?.close();
+  rowsPanel?.close();
 });
 
 describe("the standalone page", () => {
@@ -1013,5 +1064,150 @@ describe("embedded", () => {
 
   it("logged no errors on any page", () => {
     expect(errors).toEqual([]);
+  });
+});
+
+describe("pictures, QR codes and times", () => {
+  const card = (page: Page, label: string) => page.locator(".apb-card", { has: page.locator(".apb-label", { hasText: label }) }).first();
+
+  it("writes times in the panel's zone and shape, and in the viewer's once they choose", async () => {
+    const page = await open("/media");
+    // Australia/Eucla is +08:45: 12:00:05 UTC is 20:45:05 there.
+    await expect.poll(() => card(page, "Last deploy").locator(".apb-value").textContent()).toBe("2026-10-25T20:45:05+08:45");
+    expect(await card(page, "Started").locator(".apb-value").textContent()).toBe("25 Oct 2026, 20:45:05");
+    // 23:30 UTC on the 24th is the 25th in Eucla, in the table too.
+    expect(await page.locator("td[data-label='seen']").first().textContent()).toBe("25 Oct 2026");
+    await page.locator(".apb-settings-button").click();
+    await page.locator(".apb-time-zone").selectOption("UTC");
+    await expect.poll(() => card(page, "Started").locator(".apb-value").textContent()).toBe("25 Oct 2026, 12:00:05");
+    // The settings stay open across the redraw, and the choice is remembered.
+    expect(await page.locator(".apb-settings-dialog").evaluate((dialog) => (dialog as HTMLDialogElement).open)).toBe(true);
+    await page.locator(".apb-date-format").selectOption("iso");
+    await expect.poll(() => card(page, "Started").locator(".apb-value").textContent()).toBe("2026-10-25T12:00:05Z");
+    await page.reload();
+    await expect.poll(() => card(page, "Started").locator(".apb-value").textContent()).toBe("2026-10-25T12:00:05Z");
+    await page.context().close();
+  });
+
+  it("draws a QR code with the text it holds, named for screen readers", async () => {
+    const page = await open("/media");
+    const qr = card(page, "Pairing code");
+    await expect.poll(() => qr.locator("svg.apb-qr-svg").count()).toBe(1);
+    expect(await qr.locator("svg.apb-qr-svg").getAttribute("role")).toBe("img");
+    expect(await qr.locator("svg.apb-qr-svg").getAttribute("aria-label")).toContain("otpauth://totp/ACME:ops@example.com");
+    expect(await qr.locator(".apb-qr-text").textContent()).toBe("otpauth://totp/ACME:ops@example.com?secret=JBSWY3DPEHPK3PXP");
+    expect(await qr.locator(".apb-qr-copy").textContent()).toBe("Copy");
+    // A QR code reads dark on light whatever the scheme, or scanners cannot read it.
+    const fill = await qr.locator(".apb-qr-dark").evaluate((path) => getComputedStyle(path).fill);
+    expect(fill).toMatch(/rgb\(0, 0, 0\)|#000/);
+    // In a table, a thumbnail with the same accessible name.
+    expect(await page.locator("td[data-label='pairing'] svg").getAttribute("aria-label")).toContain("kiosk-01");
+    await page.context().close();
+  });
+
+  it("shows a picture with its alt text, and refuses a source the page will not load", async () => {
+    const page = await open("/media");
+    const logo = card(page, "Logo").locator("img.apb-image");
+    await expect.poll(() => logo.count()).toBe(1);
+    expect(await logo.getAttribute("alt")).toBe("Company logo");
+    expect(await logo.getAttribute("height")).toBe("48");
+    await expect.poll(() => logo.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBe(1);
+    expect(await card(page, "Bad picture").locator("img").count()).toBe(0);
+    expect(await card(page, "Bad picture").locator(".apb-media-note").textContent()).toBe("The page does not load pictures from this address.");
+    await page.context().close();
+  });
+
+  it("does not say on every card how a live value is read, unless the viewer asks", async () => {
+    const page = await open("/media");
+    const meta = card(page, "Queue depth").locator(".apb-meta");
+    await expect.poll(() => card(page, "Queue depth").locator(".apb-value").textContent()).toBe("7");
+    expect(await meta.isVisible()).toBe(false);
+    expect(await page.getByText("Read on every refresh").count()).toBe(0);
+    await page.locator(".apb-settings-button").click();
+    await page.locator(".apb-setting", { hasText: "Say how each value is read" }).locator(".apb-switch").click();
+    await expect.poll(() => card(page, "Queue depth").locator(".apb-meta").textContent()).toBe("Read on every refresh.");
+    await page.context().close();
+  });
+
+  it("passes axe with pictures, codes and the time settings open", async () => {
+    const page = await open("/media", 1200, true);
+    await expect.poll(() => page.locator("svg.apb-qr-svg").count()).toBeGreaterThan(0);
+    expect(await axe(page)).toEqual([]);
+    await page.locator(".apb-settings-button").click();
+    // Measured once the dialog has faded in: mid-fade every word in it is half its contrast.
+    await page.locator(".apb-settings-dialog").evaluate((dialog) => Promise.all(dialog.getAnimations({ subtree: true }).map((animation) => animation.finished)));
+    expect(await axe(page)).toEqual([]);
+    await page.context().close();
+  });
+});
+
+describe("row actions that ask, and the headers a page sends", () => {
+  /** A page whose browser holds the anti-forgery cookie, as the host application would have set it. */
+  async function withCookie(path: string, csrf: string | undefined, bypassCSP = false): Promise<Page> {
+    const context = await browser.newContext({ viewport: { width: 1200, height: 900 }, bypassCSP });
+    if (csrf !== undefined) await context.addCookies([{ name: "csrf", value: csrf, url: base }]);
+    const page = await context.newPage();
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`${base}${path}`);
+    return page;
+  }
+
+  it("opens a dialog for the row, with the action's fields, and runs it with the input", async () => {
+    const page = await withCookie("/rows/", "c-1");
+    await page.getByRole("button", { name: "Change role: kim" }).click();
+    const dialog = page.getByRole("dialog", { name: "Change role: kim" });
+    await expect.poll(() => dialog.isVisible()).toBe(true);
+    await dialog.getByLabel("role", { exact: true }).selectOption({ label: "editor" });
+    await dialog.getByRole("button", { name: "Change role", exact: true }).click();
+    await expect.poll(() => roleChanges.at(-1)).toEqual({ id: "kim", role: "editor" });
+    await expect.poll(() => dialog.count()).toBe(0);
+    await expect.poll(() => page.locator(".apb-block-table .apb-result").first().textContent()).toMatch(/kim is now editor/);
+    await page.close();
+  });
+
+  it("asks for the label to be typed before a row action declared confirm: \"type\" runs", async () => {
+    const page = await withCookie("/rows/", "c-1");
+    await page.getByRole("button", { name: "Remove: kim" }).click();
+    const dialog = page.getByRole("dialog", { name: "Remove: kim" });
+    const run = dialog.getByRole("button", { name: "Remove", exact: true });
+    expect(await run.isDisabled()).toBe(true);
+    await dialog.getByLabel(/Type .Remove. to confirm/).fill("Remove");
+    expect(await run.isDisabled()).toBe(false);
+    await page.close();
+  });
+
+  it("sends the anti-forgery cookie back in its header, and the headers the listener names, from a fragment", async () => {
+    const page = await withCookie("/rows-host", "c-2");
+    await page.getByRole("button", { name: "Ping: kim" }).click();
+    await expect
+      .poll(() => rowsSeen.find((entry) => entry.method === "POST" && entry.url.endsWith("/actions/ping") && entry.headers["x-csrf-token"] === "c-2"))
+      .toMatchObject({ headers: { "x-csrf-token": "c-2", "x-request-token": "m-123", "x-tenant": "acme" } });
+    await page.close();
+  });
+
+  it("is refused in the server's words when the token is missing", async () => {
+    const page = await withCookie("/rows-host", undefined);
+    await page.getByRole("button", { name: "Ping: kim" }).click();
+    await expect.poll(() => page.locator(".apb-block-table .apb-result").first().textContent()).toMatch(/anti-forgery token/);
+    await page.close();
+  });
+
+  it("adds the host page's own headers through the element's headers property", async () => {
+    const page = await withCookie("/rows-element", "c-3");
+    await expect.poll(() => page.evaluate(() => document.querySelector("admin-panel")?.shadowRoot?.querySelectorAll(".apb-row-actions button").length ?? 0)).toBe(3);
+    await page.evaluate(() => (document.querySelector("admin-panel")?.shadowRoot?.querySelector('[aria-label="Ping: kim"]') as HTMLButtonElement | null)?.click());
+    await expect.poll(() => rowsSeen.find((entry) => entry.method === "POST" && entry.headers["x-csrf-token"] === "c-3")?.headers).toMatchObject({ "x-host-token": "h-1", "x-csrf-token": "c-3" });
+    await page.close();
+  });
+
+  it("passes axe with a row dialog open", async () => {
+    const page = await withCookie("/rows/", "c-4", true);
+    await page.getByRole("button", { name: "Change role: kim" }).click();
+    await expect.poll(() => page.getByRole("dialog").isVisible()).toBe(true);
+    // The dialog opens under the pointer; a hovered button is a state of its own, not what is measured here.
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(300);
+    expect(await axe(page)).toEqual([]);
+    await page.close();
   });
 });

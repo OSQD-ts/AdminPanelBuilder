@@ -23,7 +23,7 @@ Under the listener's base path, which the router accepts with or without the pre
 | `GET /api/stream?since=&after=&feed=` | server-sent events | `event: state` frames of `PanelState`, each with an `id` a reconnecting `EventSource` sends back as `Last-Event-ID` to resume from there; `event: thinned` when frames were skipped; 503 past `maxViewers`, 404 with `stream: false` |
 | `GET /api/tables/:id?offset=&limit=&sort=&dir=&q=` | `{ table }` | [`TableRowsAnswer`](data-shapes.md#tables); 502 when the table's source failed |
 | `GET /metrics` | Prometheus text | only with `metrics`; see [metrics](../operations/metrics.md) |
-| `GET /api/changes` | `{ changes }` | the newest 200 [`ChangeRecord`](data-shapes.md#changerecord)s |
+| `GET /api/changes` | `{ changes }` | the newest 200 [`ChangeRecord`](data-shapes.md#changerecord)s, as this operator may read them: an action's `outcome` and `to` are left out, with `resultPrivate: true`, unless its `visibility` lets this operator read them |
 | `GET /api/notices` | `{ notices }` | [`Notice`](data-shapes.md#notice)s |
 | `POST /api/values/:id` | `{ value }`, or 202 `{ pending }` | body `{ "value": …, "revertAfterMs"?: …, "at"?: …, "repeat"?: { every, at, weekday?, timeZone }, "reason"?: … }`; `at` (epoch ms or ISO 8601) schedules it and the answer lists it in `value.scheduled`; needs `controls.edit` for the value's group |
 | `POST /api/schedules/:id/cancel` | `{ value }` | body `{}`; cancels a scheduled change |
@@ -31,7 +31,7 @@ Under the listener's base path, which the router accepts with or without the pre
 | `POST /api/settings/apply` | `{ changed }` | body `{ "settings": { … } }`; one change, whole or not at all; needs `controls.edit` |
 | `POST /api/layout` | `{ layout }` | body `{ "layout": { "<group id>": { "order": [card ids], "sizes": { "<card id>": { "w", "h" } } } } }`, or `null` for the layout in code; the layout every viewer gets. Groups the caller may not edit keep theirs. Recorded as a `layout` change; needs `controls.edit` |
 | `POST /api/actions/:id` | `{ result: { message } }`, or 202 `{ pending }` | body `{ "input"?: { … }, "reason"?: … }`; needs `controls.actions` |
-| `POST /api/tables/:id/actions/:action` | `{ result: { message } }` | body `{ "row": "<id>" }`; needs `controls.actions` |
+| `POST /api/tables/:id/actions/:action` | `{ result: { message } }` | body `{ "row": "<id>", "input"?: { … } }`, the input checked against the row action's fields; needs `controls.actions` |
 | `POST /api/profiles/:id` | `{ value }`, or 202 `{ pending }` | body `{ "revertAfterMs"?, "at"?, "repeat"?, "reason"? }`; needs `controls.edit` for every value it sets |
 | `POST /api/pending/:id/approve` · `/reject` | `{ value }`, or `{ result }` for an action | body `{ "reason"? }` to reject; the proposer cannot approve |
 | `POST /api/changes/:id/undo` | `{ value }` or 202 `{ pending }` | body `{}`; 409 when the value has changed since |
@@ -53,7 +53,7 @@ on, and absent on one that did not.
 | 400 | malformed JSON, a body that is not an object, no `value`, a value the constraints or a `validateAsync` check refuse, a bad `since`/`after`/`at` |
 | 401 | not authenticated (with `www-authenticate` for basic auth) |
 | 202 | an edit to a value declared with `approval`: a proposal, not a change |
-| 403 | a write from another site; a switched-off control, naming the option; a group this listener or this operator's grants may not change; a value that is not modifiable, or whose `disabledWhen` holds; approving your own proposal |
+| 403 | a write from another site (`refuseCrossSite`, naming the origin it came from and the one expected); a write without its anti-forgery token (`refuseCsrf`); a switched-off control, naming the option; a group this listener or this operator's grants may not change; a value that is not modifiable, or whose `disabledWhen` holds; approving your own proposal |
 | 404 | an unknown path, value or action — including one in a group this listener withholds |
 | 405 | a write to a read-only path, or a read of a write path |
 | 409 | an undo of a change something has changed since |

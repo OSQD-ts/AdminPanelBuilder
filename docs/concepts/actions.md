@@ -38,6 +38,29 @@ the action runs; an unknown field, a missing required one, or a value outside it
 the action never sees it. A default the field itself refuses is refused at declaration. What was entered
 is recorded with the run.
 
+## Who reads the result
+
+What an action answers can be something only the operator who ran it should see: a password-reset link, a
+one-time code, a customer's details. So by default the result and the input belong to that operator:
+
+```ts
+action("Reset link", ({ input }) => resetLink(input.user), { input: { user: {} } });              // "self", the default
+action("Requeue mail", () => `requeued ${mail.requeue()} messages`, { visibility: "everyone" });
+action("Rotate key", () => keys.rotate(), { visibility: "runners" });
+```
+
+- `"self"` — the operator who ran it; for an approved run, the one who proposed it and the one who approved.
+- `"runners"` — every operator who may run actions in its group (`controls.actions` and their grants).
+- `"everyone"` — every operator who sees its group, which is how every run was shown before there was a choice.
+
+Everybody who sees the group still sees *that* it ran — who, when, and whether it worked — in Activity; the
+others read "The result is shown only to whoever ran it." The filtering is done by the server, per
+operator, in `/api/changes`: what is not yours to read is never sent. `createAdminPanel({ actionVisibility })`
+sets the default for every action and row action that does not say. Code (`panel.changes()`, the `change`
+event), the change log and its audit sinks keep the full record: they are the audit trail, not a screen
+other operators read. A proposal waiting for approval shows its input to the operators who may decide it,
+because deciding needs it.
+
 ## Rules
 
 - **Usable only where granted.** A listener shows actions disabled unless `controls: { actions: true }`,

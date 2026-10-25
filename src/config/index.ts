@@ -19,6 +19,7 @@
  * applies, needs a restart (with the reason), or is unchanged, and the caller logs the refusals
  * before applying anything.
  */
+import { resolveOriginPolicy } from "../server/requests.js";
 import type { ListenOptions } from "../server/types.js";
 import { Section } from "./section.js";
 import { ConfigError, parseToml } from "./toml.js";
@@ -28,7 +29,7 @@ export type { TomlTable, TomlValue } from "./toml.js";
 export { Section } from "./section.js";
 
 export interface ListenerConfig {
-  listen: { port: number; host: string; basePath: string; allowedHosts: string[] };
+  listen: { port: number; host: string; basePath: string; allowedHosts: string[]; allowedOrigins: string[]; trustedProxies: string[] };
   auth: { mode: "none" | "token"; token: string };
   controls: { edit: boolean | string[]; actions: boolean | string[] };
   view: { groups: string[] };
@@ -41,7 +42,7 @@ export interface ListenerConfig {
 
 /** Every built-in default. `admin-panel.toml` writes each of these out. */
 export const DEFAULT_CONFIG: Readonly<ListenerConfig> = Object.freeze({
-  listen: { port: 9780, host: "127.0.0.1", basePath: "/", allowedHosts: [] },
+  listen: { port: 9780, host: "127.0.0.1", basePath: "/", allowedHosts: [], allowedOrigins: [], trustedProxies: [] },
   auth: { mode: "none", token: "" },
   controls: { edit: false, actions: false },
   view: { groups: [] },
@@ -61,7 +62,14 @@ export function readConfig(table: ReturnType<typeof parseToml>, options: { final
   const d = DEFAULT_CONFIG;
   const listen = root.section("listen");
   const config: ListenerConfig = {
-    listen: { port: listen.port("port", d.listen.port), host: listen.string("host", d.listen.host), basePath: listen.string("base_path", d.listen.basePath), allowedHosts: listen.stringArray("allowed_hosts", d.listen.allowedHosts) },
+    listen: {
+      port: listen.port("port", d.listen.port),
+      host: listen.string("host", d.listen.host),
+      basePath: listen.string("base_path", d.listen.basePath),
+      allowedHosts: listen.stringArray("allowed_hosts", d.listen.allowedHosts),
+      allowedOrigins: listen.stringArray("allowed_origins", d.listen.allowedOrigins),
+      trustedProxies: listen.stringArray("trusted_proxies", d.listen.trustedProxies),
+    },
     auth: { mode: "none", token: "" },
     controls: { edit: false, actions: false },
     view: { groups: [] },
@@ -145,6 +153,12 @@ function check(config: ListenerConfig): void {
   const loopback = ["127.0.0.1", "::1", "localhost"].includes(config.listen.host);
   if (!loopback && config.auth.mode === "none") throw new ConfigError(`listen.host is ${config.listen.host}, reachable beyond this machine, without auth: set PANEL_TOKEN or listen on 127.0.0.1`);
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(config.metrics.prefix)) throw new ConfigError(`metrics.prefix "${config.metrics.prefix}" is not a Prometheus name`);
+  // Checked here, by the listener's own rules, so a mistyped origin or range stops the load rather than a later listen().
+  try {
+    resolveOriginPolicy(config.listen.allowedOrigins.length > 0 ? config.listen.allowedOrigins : undefined, config.listen.trustedProxies.length > 0 ? config.listen.trustedProxies : undefined, "listen");
+  } catch (error) {
+    throw new ConfigError((error as Error).message.replace("allowedOrigins", "allowed_origins").replace("trustedProxies", "trusted_proxies"));
+  }
 }
 
 /**
@@ -185,6 +199,8 @@ export function listenOptions(config: ListenerConfig): ListenOptions {
   };
   if (config.auth.mode === "token") options.auth = { token: config.auth.token };
   if (config.listen.allowedHosts.length > 0) options.allowedHosts = config.listen.allowedHosts;
+  if (config.listen.allowedOrigins.length > 0) options.allowedOrigins = config.listen.allowedOrigins;
+  if (config.listen.trustedProxies.length > 0) options.trustedProxies = config.listen.trustedProxies;
   if (config.view.groups.length > 0) options.groups = config.view.groups;
   return options;
 }
@@ -217,6 +233,8 @@ export const RESTART_REQUIRED: Readonly<Record<string, string>> = Object.freeze(
 /** Settings a new handler applies to the next request. */
 export const RELOADABLE: readonly string[] = Object.freeze([
   "listen.allowed_hosts",
+  "listen.allowed_origins",
+  "listen.trusted_proxies",
   "auth.mode",
   "auth.token",
   "controls.edit",
@@ -245,7 +263,7 @@ export function planReload(current: ListenerConfig, next: ListenerConfig, by: st
   const plan: ReloadPlan = { by, applied: [], requiresRestart: [], unchanged: [] };
   const flat = (config: ListenerConfig): Map<string, string> => {
     const out = new Map<string, string>();
-    const names: Record<string, string> = { basePath: "base_path", allowedHosts: "allowed_hosts", maxViewers: "max_viewers", framesPerSecond: "frames_per_second", windowMs: "window_ms", perMinute: "per_minute", writeLimit: "write_limit" };
+    const names: Record<string, string> = { basePath: "base_path", allowedHosts: "allowed_hosts", allowedOrigins: "allowed_origins", trustedProxies: "trusted_proxies", maxViewers: "max_viewers", framesPerSecond: "frames_per_second", windowMs: "window_ms", perMinute: "per_minute", writeLimit: "write_limit" };
     for (const [section, values] of Object.entries(config)) {
       for (const [key, value] of Object.entries(values as Record<string, unknown>)) out.set(`${names[section] ?? section}.${names[key] ?? key}`, stable(value));
     }

@@ -27,6 +27,12 @@ export interface Prefs {
   motion: boolean;
   /** The change beside a charted value (▲ 12 in 5 min). */
   trends: boolean;
+  /** This viewer's zone for times: their browser's, UTC, or absent for the panel's. */
+  timeZone: "browser" | "UTC" | undefined;
+  /** This viewer's shape for times, one of the named formats; absent follows the panel. */
+  dateFormat: string | undefined;
+  /** Each card says how its value is read ("Read on every refresh"); off by default, since it is the same on most cards. */
+  freshness: boolean;
   /** This viewer's own arrangement of cards, over the panel's; absent follows the panel. */
   layout: PanelLayout | undefined;
   save(): void;
@@ -44,8 +50,14 @@ interface Stored {
   flash?: boolean;
   motion?: boolean;
   trends?: boolean;
+  timeZone?: string;
+  dateFormat?: string;
+  freshness?: boolean;
   layout?: unknown;
 }
+
+/** The named date formats a viewer may choose; an options object is the panel's to set. */
+export const VIEWER_DATE_FORMATS = ["relative", "date", "datetime", "datetime-seconds", "iso"] as const;
 
 export function loadPrefs(key: string): Prefs {
   let stored: Stored = {};
@@ -64,6 +76,9 @@ export function loadPrefs(key: string): Prefs {
     flash: stored.flash !== false,
     motion: stored.motion !== false,
     trends: stored.trends !== false,
+    timeZone: stored.timeZone === "browser" || stored.timeZone === "UTC" ? stored.timeZone : undefined,
+    dateFormat: typeof stored.dateFormat === "string" && (VIEWER_DATE_FORMATS as readonly string[]).includes(stored.dateFormat) ? stored.dateFormat : undefined,
+    freshness: stored.freshness === true,
     layout: readLayout(stored.layout),
     save() {
       const out: Stored = { pinned: [...prefs.pinned], collapsed: [...prefs.collapsed] };
@@ -74,6 +89,9 @@ export function loadPrefs(key: string): Prefs {
       if (!prefs.flash) out.flash = false;
       if (!prefs.motion) out.motion = false;
       if (!prefs.trends) out.trends = false;
+      if (prefs.timeZone !== undefined) out.timeZone = prefs.timeZone;
+      if (prefs.dateFormat !== undefined) out.dateFormat = prefs.dateFormat;
+      if (prefs.freshness) out.freshness = true;
       if (prefs.layout !== undefined) out.layout = prefs.layout;
       try {
         globalThis.localStorage?.setItem(key, JSON.stringify(out));
@@ -89,6 +107,9 @@ export function loadPrefs(key: string): Prefs {
       prefs.flash = true;
       prefs.motion = true;
       prefs.trends = true;
+      prefs.timeZone = undefined;
+      prefs.dateFormat = undefined;
+      prefs.freshness = false;
       prefs.save();
     },
   };

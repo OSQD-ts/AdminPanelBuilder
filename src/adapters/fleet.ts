@@ -35,6 +35,8 @@ export interface FleetPanel {
   token?: string | undefined;
   /** Where the page links to, when operators reach the panel at another address than this server does. */
   link?: string | undefined;
+  /** Fixed headers sent to that panel with every request, for a gateway in front of it. */
+  headers?: Readonly<Record<string, string>> | undefined;
 }
 
 export interface FleetOptions {
@@ -102,11 +104,17 @@ export function createFleet(options: FleetOptions): Fleet {
   if (options.panels.length > MAX_FLEET_PANELS) throw new AdminPanelConfigError(`createFleet(): ${options.panels.length} panels is more than ${MAX_FLEET_PANELS}; each is asked on every page view`);
   const names = new Set<string>();
   for (const panel of options.panels) {
-    rejectUnknown(panel, ["name", "url", "token", "link"], "createFleet(): a panel");
+    rejectUnknown(panel, ["name", "url", "token", "link", "headers"], "createFleet(): a panel");
     if (typeof panel.name !== "string" || panel.name === "") throw new AdminPanelConfigError("createFleet(): every panel needs a name");
     if (names.has(panel.name)) throw new AdminPanelConfigError(`createFleet(): two panels are named "${panel.name}"`);
     names.add(panel.name);
     if (typeof panel.url !== "string" || !/^https?:\/\//.test(panel.url)) throw new AdminPanelConfigError(`createFleet(): the URL of "${panel.name}" must start with http:// or https://`);
+    try {
+      // Checked here, where a mistake is a sentence at start-up, not a panel shown as unreachable on every view.
+      panelClient({ url: panel.url, headers: panel.headers });
+    } catch (error) {
+      throw new AdminPanelConfigError(`createFleet(): the panel "${panel.name}": ${(error as Error).message}`);
+    }
   }
   const authenticator = createAuthenticator(options.auth, "createFleet()");
   const theme = resolveTheme(options.theme);
@@ -120,7 +128,7 @@ export function createFleet(options: FleetOptions): Fleet {
     Promise.all(
       options.panels.map(async (panel) => {
         const entry: FleetEntry = { name: panel.name, link: panel.link ?? panel.url, reachable: false };
-        const client = panelClient({ url: panel.url, token: panel.token, timeoutMs, fetch: options.fetch });
+        const client = panelClient({ url: panel.url, token: panel.token, timeoutMs, fetch: options.fetch, headers: panel.headers });
         const started = Date.now();
         let settings: Record<string, JsonValue> | undefined;
         try {

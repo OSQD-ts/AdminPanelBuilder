@@ -137,14 +137,78 @@ sets to be editable here. An empty list is refused rather than read as "nothing"
 ## Before credentials
 
 In order: the auth throttle; the `Host` header, which a loopback listener requires to be a loopback name
-(the defence against DNS rebinding); and for any write, that it comes from the panel's own page — an
-`Origin` or `Sec-Fetch-Site` from another site is refused. A write must also be `application/json`, which
-an HTML form cannot send, so a forged form fails whatever cookies the browser attaches to it.
+(the defence against DNS rebinding); for any write, that it comes from the panel's own page; and for any
+write, when `csrf` is set, its anti-forgery token. A write must also be `application/json`, which an HTML
+form cannot send, so a forged form fails whatever cookies the browser attaches to it.
+
+### The page's own origin, behind a proxy
+
+A browser names the page a write came from in `Origin` and `Sec-Fetch-Site`; one from another site is
+refused, and the refusal says the origin it got and the one it expected. What the panel's own origin is
+comes from, in order:
+
+1. `allowedOrigins: ["https://admin.example.com"]` — exactly these, and nothing else. Set it when a proxy
+   in front of the panel rewrites the `Host` header, which otherwise makes every write from the real page
+   look as if it came from somewhere else.
+2. `trustedProxies: ["10.0.0.0/8"]` — when the connection comes from one of these addresses or ranges,
+   the host and scheme that proxy forwarded (`X-Forwarded-Host`, `X-Forwarded-Proto`, the rightmost entry
+   of each, the one the nearest proxy wrote). From any other address those headers are ignored: anybody
+   can send them, so believing them would let a page on another site name itself.
+3. The `Host` header.
+
+An entry that is not an origin, or a range that is not an address or CIDR, stops the listener with a
+sentence: a range that matches nothing is a proxy that is never believed. Both are in the listener file
+too, as `[listen] allowed_origins` and `trusted_proxies`, and both reload without a restart. A client that
+is not a browser sends no `Origin` and is judged by its credentials alone. The ranges are matched with the
+same `ip.ts` bothandlerjs uses (IPv4-mapped IPv6 is the IPv4 address).
+
+### The anti-forgery token
+
+`csrf` asks every write for a token in a header, beside the origin check:
+
+```ts
+panel.handler({
+  auth: { check: (request) => sessionUser(request) },
+  csrf: { header: "x-csrf-token", cookie: "csrf" },          // double submit: header must equal the cookie
+  // csrf: { header: "x-csrf-token", verify: (token, request) => tokens.valid(token, request) },
+});
+```
+
+With `cookie`, the page reads that cookie (so it must not be `HttpOnly`) and sends it back in the header,
+and the panel compares the two: nothing else to configure, and no workaround in the host page. With
+`verify`, your function decides, and a function that throws refuses the write; supply the token to the
+page with `requestHeaders` (below). A write carrying a bearer token is exempt — no browser attaches one by
+itself — so the typed client and the command line are unaffected. Sign-in paths under `/auth/` are exempt
+too: they carry their own state. A refused write is a 403 with the key `refuseCsrf`, naming the header.
+
+### Headers the page sends
+
+`requestHeaders` lists headers the page sends with every request, each a fixed value (written into the
+page, so never a secret), a cookie of the host page, or the `content` of a `<meta name>` in it:
+
+```ts
+panel.handler({
+  requestHeaders: {
+    "x-csrf-token": { meta: "csrf-token" },   // <meta name="csrf-token" content="…"> in the host page
+    "x-tenant": "acme",
+  },
+});
+```
+
+Each is read when the request is sent, so a token that rotates is sent as it is now. Names a browser does
+not let a page set (`Cookie`, `Host`, `Origin`, `Sec-*`, `Proxy-*`…) and the panel's own
+`x-apb-on-behalf-of` are refused when the listener starts. The page's live stream is an `EventSource`,
+which cannot carry headers: it is a read, which the anti-forgery check does not apply to, and where a
+gateway in front of the panel refuses it without a header, the page polls instead. An embedded
+`<admin-panel>` element can add its own: see [Embedding](../integration/embedding.md#request-headers).
 
 ## The page
 
 - A fresh nonce per response and a CSP built from `default-src 'none'`: the page may run its one script,
-  apply its one stylesheet and talk to its own origin, and nothing else. `frame-ancestors 'none'`,
+  apply its one stylesheet, talk to its own origin and show pictures from it and from `data:` URIs, and
+  nothing else. `imageSources: ["https://cdn.example.com"]` on the listener adds origins to `img-src`
+  for `format: "image"` values; each entry must be an http(s) origin with no path, or the listener refuses
+  to start. `frame-ancestors 'none'`,
   `form-action 'none'`, `base-uri 'none'`.
 - `cache-control: no-store`, `x-content-type-options: nosniff`, `x-frame-options: DENY`,
   `referrer-policy: no-referrer` on every response. No CORS headers, ever.

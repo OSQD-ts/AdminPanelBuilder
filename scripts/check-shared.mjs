@@ -11,16 +11,23 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const FILES = ["clock.ts", "emitter.ts", "async.ts"];
 const SIBLINGS = [
   ["hackerpot", join(root, "..", "HackerPot", "src", "internal")],
   ["bothandlerjs", join(root, "..", "BotHandler.js", "src", "internal")],
 ];
+// Each file, and the siblings it is copied from. `ip.ts` is bothandlerjs's: hackerpot keeps a
+// version of its own that is not (yet) the same file.
+const FILES = [
+  ["clock.ts", SIBLINGS],
+  ["emitter.ts", SIBLINGS],
+  ["async.ts", SIBLINGS],
+  ["ip.ts", SIBLINGS.filter(([name]) => name === "bothandlerjs")],
+];
 const body = (text) => text.split("\n").slice(1).join("\n");
 let differences = 0;
-for (const file of FILES) {
+for (const [file, siblings] of FILES) {
   const ours = readFileSync(join(root, "src", "internal", file), "utf8");
-  for (const [name, directory] of SIBLINGS) {
+  for (const [name, directory] of siblings) {
     const path = join(directory, file);
     if (!existsSync(path)) {
       console.error(`skip  ${file} in ${name}: not checked out beside this repository`);

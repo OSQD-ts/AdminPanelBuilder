@@ -31,7 +31,7 @@ import type { Translate } from "./i18n.js";
 import { type Destination, installShortcuts, type Shortcuts } from "./palette.js";
 import { GridView, type Placed } from "./grid.js";
 import type { Prefs } from "./prefs.js";
-import { buildSettings } from "./settings.js";
+import { buildSettings, type Settings } from "./settings.js";
 import { type Arranging, startArranging } from "./arrange.js";
 import { extras } from "./registry.js";
 import { type Store, serverTime } from "./store.js";
@@ -61,6 +61,7 @@ export class View implements CardHost {
   private tablist!: HTMLElement;
   private nav!: HTMLElement;
   private arranging: Arranging | undefined;
+  private settingsUi: Settings | undefined;
   private arrange: HTMLButtonElement | undefined;
   /** A structure that arrived while arranging, drawn once it ends. */
   private held: Store | undefined;
@@ -140,6 +141,7 @@ export class View implements CardHost {
     this.status = el("span", "apb-status");
     this.status.setAttribute("role", "status");
     const settings = buildSettings(this);
+    this.settingsUi = settings;
     header.append(this.status, this.arrangeButton(), settings.button);
     container.append(header);
 
@@ -378,6 +380,14 @@ export class View implements CardHost {
 
   schema(): PanelSchema {
     return this.current.schema;
+  }
+
+  /** Draws the page again after a choice that changes how it is written; the settings stay open if they were. */
+  redraw(): void {
+    const reopen = this.settingsUi?.element.hasAttribute("open") === true;
+    this.build(this.current);
+    this.update();
+    if (reopen) this.settingsUi?.open();
   }
 
   /**

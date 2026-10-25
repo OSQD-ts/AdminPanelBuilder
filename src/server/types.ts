@@ -60,6 +60,25 @@ export interface PanelControls {
   actions?: boolean | readonly string[] | undefined;
 }
 
+/**
+ * Where the page finds a header to send with every request: a fixed value (never a secret: it is
+ * written into the page), the value of a cookie the page can read, or the `content` of a
+ * `<meta name>` in the host page — the usual places an application puts its anti-forgery token.
+ */
+export type RequestHeaderSource = string | { cookie: string } | { meta: string };
+
+/**
+ * The anti-forgery check for writes. `header` names the header the token travels in; `cookie`
+ * compares it with a cookie of that name (the double-submit pattern, the page reading the cookie
+ * itself), or `verify` decides with your own code. A request carrying a bearer token is exempt: no
+ * browser attaches one by itself, so a forged request cannot.
+ */
+export interface CsrfOptions {
+  header: string;
+  cookie?: string | undefined;
+  verify?: ((token: string, request: AuthRequest) => boolean | Promise<boolean>) | undefined;
+}
+
 export interface StreamOptions {
   /** Open streams at once; past it a viewer is told 503 and polls. Default 16. */
   maxViewers?: number | undefined;
@@ -84,6 +103,27 @@ export interface ServeOptions {
    */
   allowedHosts?: readonly string[] | undefined;
   /**
+   * The origins a browser write is accepted from, as `"https://admin.example.com"`. When set, these
+   * and nothing else: a write from the panel's page reached by any other name is refused. Default: the
+   * page's origin is its `Host` header (or what `trustedProxies` forwarded). Set it when a proxy in
+   * front of the panel rewrites `Host`.
+   */
+  allowedOrigins?: readonly string[] | undefined;
+  /**
+   * Addresses or CIDRs of the proxies in front of this panel. A request whose connection comes from
+   * one of them is judged by the host and scheme it forwarded (`X-Forwarded-Host`, `X-Forwarded-Proto`)
+   * rather than its `Host` header. From any other address those headers are ignored: anybody can send them.
+   */
+  trustedProxies?: readonly string[] | undefined;
+  /** The anti-forgery check for writes. See `CsrfOptions`. Default off. */
+  csrf?: CsrfOptions | undefined;
+  /**
+   * Headers the page sends with every request it makes: `{ "x-csrf-token": { meta: "csrf-token" } }`.
+   * Read when each request is sent, so a token that changes is sent as it is now. The live stream is
+   * an `EventSource`, which cannot carry headers; where a gateway refuses it without one, the page polls.
+   */
+  requestHeaders?: Readonly<Record<string, RequestHeaderSource>> | undefined;
+  /**
    * Failed authentications allowed per address before a 429. Default 10 a minute; `false` turns it off.
    * `store` shares the counts between replicas: see `redisThrottleStore`.
    */
@@ -101,6 +141,12 @@ export interface ServeOptions {
   stream?: boolean | StreamOptions | undefined;
   /** Prometheus exposition of numeric values at `/metrics`, behind the same auth. Default off. */
   metrics?: boolean | { prefix?: string | undefined } | undefined;
+  /**
+   * Origins the page may load pictures from (`format: "image"` values and columns), added to its
+   * Content-Security-Policy `img-src`, which otherwise allows this origin and `data:` URIs only:
+   * `["https://cdn.example.com"]`. Each is an http(s) origin with no path.
+   */
+  imageSources?: readonly string[] | undefined;
 }
 
 export interface ListenOptions extends ServeOptions {

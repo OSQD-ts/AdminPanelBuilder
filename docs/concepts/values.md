@@ -53,7 +53,10 @@ Inferred from the starting value, or set with `kind`:
 | `id` | all | Stable id. Default: from the label, or `value-<n>` by order of declaration |
 | `label`, `description` | all | What the page says. A string as the second argument is the label |
 | `group`, `order` | all | See [groups](groups.md) |
-| `unit`, `format`, `decimals` | all | How a number is written; `format` is `plain`, `integer`, `percent` (a fraction), `bytes`, `duration` (ms) or `timestamp` |
+| `unit`, `format`, `decimals` | all | How a number is written; `format` is `plain`, `integer`, `percent` (a fraction), `bytes`, `duration` (ms), `timestamp`, or, for a string, `image` and `qr`: see [pictures, QR codes and times](#pictures-qr-codes-and-times) |
+| `dateFormat` | `format: "timestamp"` | How this value's time is written, over the panel's `dateFormat` |
+| `image` | `format: "image"` | `{ alt, fit?: "contain" \| "cover", height? }`; `alt` is required |
+| `qr` | `format: "qr"` | `{ level?: "L" \| "M" \| "Q" \| "H" }`, the error correction; default `M` |
 | `chart` | all | See [charts](charts.md) |
 | `sensitive` | all | Never sent to a browser; a modifiable one can be replaced but not read back |
 | `status` | all | `{ warn, bad, below? }` or a function: the value is flagged with a word and a colour past a threshold |
@@ -103,6 +106,42 @@ on every update and apply on the server as well as the page: an edit to a hidden
 run of a disabled action, is refused with the reason. A condition that throws hides and disables
 nothing — a bug in one must not lock an operator out.
 
+## Pictures, QR codes and times
+
+A timestamp (`format: "timestamp"`, milliseconds since 1970 or an ISO string) is written in the panel's
+zone and shape. `createAdminPanel({ timeZone, dateFormat, dateLocale })` sets them for every page:
+
+```ts
+const panel = createAdminPanel({ timeZone: "Europe/Warsaw", dateFormat: "datetime", dateLocale: "pl-PL" });
+panel.viewable(() => lastDeploy, { label: "Last deploy", format: "timestamp", dateFormat: "relative" });
+```
+
+- `timeZone` is an IANA name; absent, each viewer's browser decides. A name this runtime does not know is
+  refused when the panel is made, not shown in the wrong zone.
+- `dateFormat` is `"datetime-seconds"` (the default), `"datetime"`, `"date"`, `"time"`, `"relative"`
+  ("5 min ago", a date once a day has passed), `"iso"` (ISO 8601 with the zone's offset), or
+  `Intl.DateTimeFormat` options such as `{ month: "short", day: "numeric" }`. A value or a table column
+  may set its own.
+- `dateLocale` writes dates in another language's conventions than the page's words.
+
+Each viewer may choose, in Settings, their browser's zone or UTC over the panel's, and another shape. A
+moment that must be read as one (when a scheduled change runs) is never written relative. Chart axes,
+tooltips, tables, Activity and feeds use the same settings; a chart's CSV export stays ISO 8601 in UTC.
+
+A string with `format: "image"` is drawn as a picture: an http(s) URL, a path on this origin, or a
+`data:image/…` URI. Anything else (`javascript:`, `file:`, `data:text/html`) is not loaded, and the card
+says so. The standalone page's Content-Security-Policy allows pictures from its own origin and `data:`;
+name other origins with the listener's `imageSources` ([security](../operations/security.md#the-page)).
+
+```ts
+panel.viewable(() => user.avatarUrl, { label: "Avatar", format: "image", image: { alt: "The signed-in operator", height: 96 } });
+panel.viewable(() => pairingUri, { label: "Pair a device", format: "qr" });
+```
+
+A string with `format: "qr"` is drawn as a QR code by the page itself, with the text beside it and a
+button that copies it. Up to `MAX_QR_BYTES` bytes at level L (fewer at higher levels); a longer string is
+shown as text. In a table both are thumbnails.
+
 ## What is refused at declaration
 
 A declaration that cannot do what it appears to promise throws `AdminPanelConfigError` on the line that
@@ -115,7 +154,9 @@ declared it:
 - numeric constraints on a string, text constraints on a number;
 - two values with one id;
 - `persist` without a store, or without an id or label to store it under;
-- a function passed to `modifiable`, which has nowhere to put a new value.
+- a function passed to `modifiable`, which has nowhere to put a new value;
+- a `format` the page does not write, a `dateFormat` on anything but a timestamp, a picture without
+  alt text, a picture or a QR code of a kind other than string.
 
 A viewable shows whatever it is given: refusing to display something is worse than displaying it oddly.
 A modifiable's constraints hold for code as well as for operators.

@@ -23,7 +23,7 @@ import type { ChartSchema, JsonValue, Sample, ValueSchema } from "../types.js";
 import { toCsv } from "./csv.js";
 import { binCount, histogram, lttb, stack } from "./downsample.js";
 import { clear, el, svgEl, uid } from "./dom.js";
-import { type FormatSpec, formatAgo, formatDuration, formatNumber, numericEntries } from "./format.js";
+import { type FormatSpec, formatAgo, formatClock, type TimeSpec, formatDuration, formatNumber, numericEntries } from "./format.js";
 import { areaPath, BOX, type Extent, extentOf, linePath, niceTicks, project, scale } from "./geometry.js";
 import type { Translate } from "./i18n.js";
 import { type Store, serverTime } from "./store.js";
@@ -43,7 +43,7 @@ const DRAWN_POINTS = 600;
 const WINDOWS = [0, 60_000, 300_000, 900_000, 3_600_000];
 
 export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, ValueSchema>, t: Translate): ChartView {
-  const spec: FormatSpec = { format: schema.format, unit: schema.unit, locale: t.locale };
+  const spec: FormatSpec = { format: schema.format, unit: schema.unit, locale: t.locale, time: t.time };
   const figure = el("figure", "apb-chart");
   const summaryId = uid("chart-summary");
   // The card around it carries the name and the description, where every other card carries them:
@@ -154,7 +154,7 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
     pointing = byPointer;
     readout.setAttribute("aria-live", byPointer ? "off" : "polite");
     readout.hidden = byPointer;
-    const when = new Date(moment.time).toLocaleTimeString(t.locale);
+    const when = formatClock(moment.time, { locale: t.locale, time: t.time });
     readout.textContent = moment.cells
       .map((cell, series) => (cell === undefined ? undefined : t("chartPoint", { label: momentLabels[series] ?? "", value: formatNumber(cell[1], spec), time: when })))
       .filter((text): text is string => text !== undefined)
@@ -330,9 +330,9 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
     if (!sparkline) {
       const axis = el("div", "apb-axis");
       if (against && typeof schema.over === "object") {
-        const overSpec = specOf(values.get(schema.over.value), t.locale);
+        const overSpec = specOf(values.get(schema.over.value), t.locale, t.time);
         axis.append(el("span", null, formatNumber(x.min, overSpec)), el("span", null, schema.over.label), el("span", null, formatNumber(x.max, overSpec)));
-      } else axis.append(el("span", null, formatAgo(x.min, now, t.locale)), el("span", null, zoom === undefined && paused === undefined ? t("now") : formatAgo(x.max, now, t.locale)));
+      } else axis.append(el("span", null, formatAgo(x.min, now, t.locale, t.time)), el("span", null, zoom === undefined && paused === undefined ? t("now") : formatAgo(x.max, now, t.locale, t.time)));
       body.append(axis);
       if (marks.length > 0) body.append(el("p", "apb-hint", marks.map((mark) => mark.text).join(" · ")));
     }
@@ -370,7 +370,7 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
     const head = [t("colTime"), ...(against && typeof schema.over === "object" ? [schema.over.label] : []), ...series.map(({ entry }) => entry.label)];
     const samplesOnly = listed.map(({ samples }) => samples);
     csv = [csvHead, ...rawRows(samplesOnly, against)];
-    table?.fill(head, tableRows(samplesOnly, against, spec, specOf(typeof schema.over === "object" ? values.get(schema.over.value) : undefined, t.locale), t.locale));
+    table?.fill(head, tableRows(samplesOnly, against, spec, specOf(typeof schema.over === "object" ? values.get(schema.over.value) : undefined, t.locale, t.time), t.locale));
   }
 
   /** The numbers at the cursor, beside it, for a pointer: the readout says the same to a screen reader. */
@@ -379,7 +379,7 @@ export function buildChart(schema: ChartSchema, values: ReadonlyMap<string, Valu
     box.setAttribute("aria-hidden", "true");
     box.dataset.side = position > BOX * 0.6 ? "left" : "right";
     box.style.left = `${(position / BOX) * 100}%`;
-    box.append(el("div", "apb-tip-time", new Date(moment.time).toLocaleTimeString(t.locale)));
+    box.append(el("div", "apb-tip-time", formatClock(moment.time, { locale: t.locale, time: t.time })));
     moment.cells.forEach((cell, index) => {
       if (cell === undefined) return;
       const row = el("div", `apb-tip-row apb-slot-${momentSlots[index] ?? 1}`);
@@ -578,8 +578,8 @@ function numberOf(value: JsonValue | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function specOf(schema: ValueSchema | undefined, locale: string | undefined): FormatSpec {
-  return schema === undefined ? { locale } : { format: schema.format, unit: schema.unit, decimals: schema.decimals, kind: schema.kind, locale };
+function specOf(schema: ValueSchema | undefined, locale: string | undefined, time?: TimeSpec): FormatSpec {
+  return schema === undefined ? { locale, time } : { format: schema.format, dateFormat: schema.dateFormat, unit: schema.unit, decimals: schema.decimals, kind: schema.kind, locale, time };
 }
 
 function describeKind(schema: ChartSchema, t: Translate): string {
@@ -592,7 +592,7 @@ function describeKind(schema: ChartSchema, t: Translate): string {
 function tableRows(series: ReadonlyArray<readonly Sample[]>, against: boolean, spec: FormatSpec, overSpec: FormatSpec, locale: string | undefined): string[][] {
   return byTime(series).map(({ time, cells }) => {
     const x = cells.find((cell) => cell !== undefined)?.[2];
-    return [new Date(time).toLocaleTimeString(locale), ...(against ? [x === undefined ? "—" : formatNumber(x, overSpec)] : []), ...cells.map((cell) => (cell === undefined ? "—" : formatNumber(cell[1], spec)))];
+    return [formatClock(time, { locale, time: spec.time }), ...(against ? [x === undefined ? "—" : formatNumber(x, overSpec)] : []), ...cells.map((cell) => (cell === undefined ? "—" : formatNumber(cell[1], spec)))];
   });
 }
 

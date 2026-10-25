@@ -27,8 +27,10 @@ import { AdminPanelConfigError } from "../errors.js";
 import { withDeadline } from "../internal/async.js";
 import { rejectUnknown } from "../internal/options.js";
 import { escapeHtml, scriptJson, usesExtras } from "../render/html.js";
+import { refusal } from "../i18n/refuse.js";
 import { createAuthenticator, ON_BEHALF_HEADER } from "../server/auth.js";
-import type { PanelAuth, PanelControls } from "../server/types.js";
+import { checkCsrf, checkHeaderName, checkOriginOf, resolveCsrf, resolveHeaderSources, resolveOriginPolicy } from "../server/requests.js";
+import type { CsrfOptions, PanelAuth, PanelControls, RequestHeaderSource } from "../server/types.js";
 import type { ChangeRecord, PanelSchema, PanelState } from "../types.js";
 import type { NodeLikeRequest, NodeLikeResponse } from "./node.js";
 
@@ -48,6 +50,19 @@ export interface RemotePanelOptions {
   /** Default 10 seconds. */
   timeoutMs?: number | undefined;
   fetch?: typeof fetch | undefined;
+  /** As for a listener: the origins a browser write is accepted from. See `ServeOptions.allowedOrigins`. */
+  allowedOrigins?: readonly string[] | undefined;
+  /** As for a listener: proxies whose forwarded host and scheme are believed. See `ServeOptions.trustedProxies`. */
+  trustedProxies?: readonly string[] | undefined;
+  /** As for a listener: the anti-forgery check for writes reaching this handler. */
+  csrf?: CsrfOptions | undefined;
+  /** As for a listener: headers the page served here sends with every request. The upstream's are not used: the page talks to this handler. */
+  requestHeaders?: Readonly<Record<string, RequestHeaderSource>> | undefined;
+  /**
+   * Fixed headers sent to the upstream with every request, for a gateway in front of it. They cannot
+   * replace the upstream token or the operator's name, which this handler sets itself.
+   */
+  upstreamHeaders?: Readonly<Record<string, string>> | undefined;
 }
 
 /** What one filtered schema lets through: the ids of everything in the named groups. */
@@ -67,7 +82,12 @@ const FORWARDED = /^\/(api\/(schema|state|changes|notices|settings|openapi\.json
 const WRITES = /^\/api\/((values|actions|profiles|pending|changes|tables|schedules|settings)\/|layout$)/;
 
 export function remotePanelHandler(options: RemotePanelOptions): (request: NodeLikeRequest, response: NodeLikeResponse) => void {
-  rejectUnknown(options, ["upstream", "token", "basePath", "auth", "controls", "groups", "stream", "timeoutMs", "fetch"], "remotePanelHandler()");
+  rejectUnknown(options, ["upstream", "token", "basePath", "auth", "controls", "groups", "stream", "timeoutMs", "fetch", "allowedOrigins", "trustedProxies", "csrf", "requestHeaders", "upstreamHeaders"], "remotePanelHandler()");
+  const where = "remotePanelHandler()";
+  const origins = resolveOriginPolicy(options.allowedOrigins, options.trustedProxies, where);
+  const csrf = resolveCsrf(options.csrf, where);
+  const headerSources = resolveHeaderSources(options.requestHeaders, csrf, where);
+  const extraUpstream = checkUpstreamHeaders(options.upstreamHeaders, where);
   if (options.groups !== undefined && (!Array.isArray(options.groups) || options.groups.length === 0)) throw new AdminPanelConfigError("remotePanelHandler(): groups is empty, which would show nothing; leave it out to show every group");
   const groups = options.groups === undefined ? undefined : new Set(options.groups);
   const streaming = options.stream !== false;
@@ -82,7 +102,7 @@ export function remotePanelHandler(options: RemotePanelOptions): (request: NodeL
   const timeout = options.timeoutMs ?? 10_000;
 
   const call = (path: string, actor: string, init: RequestInit = {}): Promise<Response> =>
-    withDeadline(send(`${upstream}${path}`, { ...init, headers: { ...(init.headers as Record<string, string> | undefined), authorization: `Bearer ${options.token}`, [ON_BEHALF_HEADER]: actor } }), timeout, "the upstream panel");
+    withDeadline(send(`${upstream}${path}`, { ...init, headers: { ...extraUpstream, ...(init.headers as Record<string, string> | undefined), authorization: `Bearer ${options.token}`, [ON_BEHALF_HEADER]: actor } }), timeout, "the upstream panel");
 
   const answer = (response: NodeLikeResponse, status: number, headers: Record<string, string>, body: string): void => {
     response.statusCode = status;
@@ -93,8 +113,10 @@ export function remotePanelHandler(options: RemotePanelOptions): (request: NodeL
 
   /** The upstream's schema as this listener shows it: its groups, its controls, its stream. */
   const localSchema = (schema: PanelSchema): PanelSchema => {
-    const { stream, ...rest } = schema;
+    // The upstream's page headers are for its own page; this page talks to this handler, which says its own.
+    const { stream, requestHeaders: _upstreamHeaders, ...rest } = schema;
     const local: PanelSchema = { ...rest, controls: { edit: schema.controls.edit && edit, actions: schema.controls.actions && actions } };
+    if (headerSources.length > 0) local.requestHeaders = headerSources.map((source) => ({ ...source }));
     if (groups !== undefined) local.groups = schema.groups.filter((group) => groups.has(group.title));
     if (stream === true && streaming) local.stream = true;
     return local;
@@ -172,7 +194,7 @@ export function remotePanelHandler(options: RemotePanelOptions): (request: NodeL
     if (response.write === undefined) return error(response, 404, "this server cannot stream; poll /api/state instead");
     const allowed = await allowedFor(actor);
     const controller = new AbortController();
-    const upstreamHeaders: Record<string, string> = { accept: "text/event-stream", authorization: `Bearer ${options.token}`, [ON_BEHALF_HEADER]: actor };
+    const upstreamHeaders: Record<string, string> = { ...extraUpstream, accept: "text/event-stream", authorization: `Bearer ${options.token}`, [ON_BEHALF_HEADER]: actor };
     if (headers["last-event-id"] !== undefined) upstreamHeaders["last-event-id"] = headers["last-event-id"];
     const reply = await withDeadline(send(`${upstream}${path}`, { headers: upstreamHeaders, signal: controller.signal }), timeout, "the upstream panel");
     if (!reply.ok || reply.body === null) return answer(response, reply.status, { "content-type": "application/json; charset=utf-8" }, await reply.text());
@@ -263,7 +285,10 @@ export function remotePanelHandler(options: RemotePanelOptions): (request: NodeL
         const needsActions = /^\/api\/(actions|tables)\//.test(path);
         const needsNothing = path === "/api/settings/diff";
         if (!needsNothing && (needsActions ? !actions : !edit)) return error(response, 403, `${needsActions ? "actions are" : "editing is"} switched off on this listener`);
-        if (headers.origin !== undefined && new URL(headers.origin).host !== headers.host) return error(response, 403, "a write must come from the panel's own page");
+        const address = request.socket?.remoteAddress ?? "";
+        const verdict = checkOriginOf({ headers, address }, origins);
+        if (!verdict.ok) return error(response, 403, refusal("refuseCrossSite", { origin: verdict.origin, expected: verdict.expected }).message);
+        if (csrf !== undefined && !(await checkCsrf(csrf, { method, path, headers, address }))) return error(response, 403, refusal("refuseCsrf", { header: csrf.header }).message);
         if (!(headers["content-type"] ?? "").startsWith("application/json")) return error(response, 415, "a write must be sent as application/json");
         const body = await readBody(request);
         const allowed = await allowedFor(result.actor);
@@ -306,4 +331,18 @@ function readBody(request: NodeLikeRequest): Promise<string> {
     request.on("end", () => resolve(text));
     request.on("error", reject);
   });
+}
+
+/** Fixed headers for the upstream: names a page could not send either, and never the ones this handler owns. */
+function checkUpstreamHeaders(headers: Readonly<Record<string, string>> | undefined, where: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (headers === undefined) return out;
+  if (headers === null || typeof headers !== "object" || Array.isArray(headers)) throw new AdminPanelConfigError(`${where}: upstreamHeaders is an object of header names and values`);
+  for (const [name, value] of Object.entries(headers)) {
+    const header = checkHeaderName(name, where, "upstreamHeaders");
+    if (header === "authorization" || header === "accept") throw new AdminPanelConfigError(`${where}: upstreamHeaders cannot set "${name}"; this handler sets it itself`);
+    if (typeof value !== "string" || !/^[\t\x20-\x7e]{0,4096}$/.test(value)) throw new AdminPanelConfigError(`${where}: upstreamHeaders["${name}"] is not a header value: printable text without line breaks`);
+    out[header] = value;
+  }
+  return out;
 }

@@ -25,6 +25,7 @@ What is there. Changes when anything is declared, moved or reconfigured; `struct
   controls: { edit: boolean; actions: boolean };
   restrictions: Restriction[];     // what this listener does not allow, and why: { text, key, params? }
   groups: Array<{ id: string; title: string; description?: string; grid?: { columns: number; rowHeight: number }; items: ItemSchema[] }>;
+  requestHeaders?: Array<{ name: string; value?: string; cookie?: string; meta?: string }>;   // sent with every request: see operations/security.md
 }
 ```
 
@@ -37,14 +38,16 @@ What is there. Changes when anything is declared, moved or reconfigured; `struct
 - **`{ type: "action", id, label, description?, confirm, destructive, runnable, input?, span? }`** — each
   input field is `{ name, label, description?, kind, constraints, optional, default? }`.
 - **`{ type: "table", id, title, description?, columns, pageSize, searchable, actions, runnable, span? }`** —
-  a column is `{ key, label, format?, unit?, decimals?, sortable }`, an action `{ id, label, confirm, destructive }`.
+  a column is `{ key, label, format?, unit?, decimals?, sortable }`, an action `{ id, label, confirm, destructive, input?, typeToConfirm? }`
+  with input fields as an action's.
 - **`{ type: "feed", id, title, description?, capacity, perSecond, span? }`**
 - **`{ type: "profile", id, title, description?, confirm, writable, settings, span? }`** — a setting is
   `{ value, label, to? }`, `to` absent for a sensitive value.
 
 A value item also carries `writable` (this listener lets the viewer change it), `approval`, `timed` and
 `span`; every item carries `size` (`{ w, h }`) when code gave one; a chart carries `stacked`, `lines` (`{ label, value? , from? }`) and `bins` when set. A group
-carries `layout`. The schema carries `locale`, `messages` when replaced, and `stream: true` when the
+carries `layout`. A value item or a table column carries `dateFormat`, `image` and `qr` when declared.
+The schema carries `time` (`{ timeZone?, dateFormat?, dateLocale? }`) when the panel sets any, `locale`, `messages` when replaced, and `stream: true` when the
 listener streams.
 
 ## PanelState
@@ -110,11 +113,15 @@ one-second bucket; a re-sent newest bucket has the same `t` and replaces the one
   origin?: string;    // the replica that made it, when it arrived from another
   reason?: string;    // why, in the words of whoever made it
   hash?: string; prevHash?: string;   // the tamper-evident chain; see operations/audit.md
+  visibility?: "self" | "runners";    // an action's: who reads its outcome and input; absent is everyone
+  owners?: string[];                   // with "self": the operators the result belongs to
+  resultPrivate?: boolean;             // in /api/changes: outcome and to were left out for this operator
 }
 ```
 
 `from` and `to` are absent for a sensitive value; for a profile they are records by value id; for an
-action `to` holds the input it was given. `revertible` is computed when the list is read.
+action `to` holds the input it was given. `revertible` is computed when the list is read, and so is
+`resultPrivate`: the record kept has everything.
 
 ## Notice
 

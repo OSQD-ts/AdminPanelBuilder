@@ -24,8 +24,47 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
  */
 export type ValueKind = "number" | "string" | "boolean" | "enum" | "json";
 
-/** How a number or a timestamp is written on the page. The stored value is never rounded. */
-export type ValueFormat = "plain" | "integer" | "percent" | "bytes" | "duration" | "timestamp";
+/**
+ * How a number or a timestamp is written on the page. The stored value is never rounded.
+ * `"image"` shows a string (an http(s) URL, a path, or a `data:image/…` URI) as a picture, and
+ * `"qr"` draws a string as a QR code beside the text it encodes; see `ImageOptions` and `QrOptions`.
+ */
+export type ValueFormat = "plain" | "integer" | "percent" | "bytes" | "duration" | "timestamp" | "image" | "qr";
+
+/**
+ * How a timestamp is written: `"relative"` ("5 min ago"), `"date"`, `"time"`, `"datetime"`,
+ * `"datetime-seconds"` (the default), `"iso"` (ISO 8601 with the zone's offset), or
+ * `Intl.DateTimeFormat` options for anything else (`{ month: "short", day: "numeric" }`).
+ */
+export type DateFormat = "relative" | "date" | "time" | "datetime" | "datetime-seconds" | "iso" | DateFormatOptions;
+
+/** The `Intl.DateTimeFormat` options a `DateFormat` may carry; the zone is the panel's or the viewer's. */
+export type DateFormatOptions = Pick<Intl.DateTimeFormatOptions, "weekday" | "era" | "year" | "month" | "day" | "hour" | "minute" | "second" | "fractionalSecondDigits" | "timeZoneName" | "hour12" | "hourCycle" | "dateStyle" | "timeStyle">;
+
+/** A string value shown as a picture. */
+export interface ImageOptions {
+  /** What the picture shows, for anybody who cannot see it. Required: a picture without one is a hole in the page for a screen reader. */
+  alt: string;
+  /** Fit inside the card (default) or fill it, cropping. */
+  fit?: "contain" | "cover" | undefined;
+  /** Height in CSS pixels, 24 to 480. Default 160 on a card, 32 in a table. */
+  height?: number | undefined;
+}
+
+/** A string value drawn as a QR code. */
+export interface QrOptions {
+  /** Error correction: L 7 %, M 15 % (default), Q 25 %, H 30 % of the code may be damaged and still read. */
+  level?: "L" | "M" | "Q" | "H" | undefined;
+}
+
+/** How the page writes times: the panel's defaults, which each viewer may override in their settings. */
+export interface TimeSettings {
+  /** An IANA zone ("Europe/Warsaw", "UTC"). Absent: each viewer's own browser. */
+  timeZone?: string;
+  dateFormat?: DateFormat;
+  /** A BCP 47 tag for how dates are written ("en-GB", "pl-PL"), over the page's language. */
+  dateLocale?: string;
+}
 
 /**
  * `histogram` bins an array of numbers; `heatmap` draws a record of records (rows of columns).
@@ -145,6 +184,12 @@ export interface ViewableOptions extends CommonOptions {
   /** Written after the number: `"ms"`, `"req/s"`, `"players"`. */
   unit?: string | undefined;
   format?: ValueFormat | undefined;
+  /** How a `format: "timestamp"` value is written, over the panel's `dateFormat`. */
+  dateFormat?: DateFormat | undefined;
+  /** For `format: "image"`: the picture's alt text and fit. Required with that format. */
+  image?: ImageOptions | undefined;
+  /** For `format: "qr"`: the error correction level. */
+  qr?: QrOptions | undefined;
   /** Decimal places shown. The stored value is never rounded. */
   decimals?: number | undefined;
   /** `true` for a line over time with the defaults, a kind name for that kind over time, or the full options. */
@@ -338,6 +383,8 @@ export interface ActionOptions extends CommonOptions {
   timeoutMs?: number | undefined;
   /** Fields the operator fills in before the action runs: `{ player: { kind: "string", maxLength: 40 } }`. */
   input?: Readonly<Record<string, InputField>> | undefined;
+  /** Who sees what a run answered, in the activity list. See `ActionVisibility`. Default: the panel's `actionVisibility`. */
+  visibility?: ActionVisibility | undefined;
   visibleWhen?: (() => boolean) | undefined;
   disabledWhen?: (() => string | false | undefined) | undefined;
 }
@@ -348,6 +395,12 @@ export interface TableColumn {
   key: string;
   label?: string | undefined;
   format?: ValueFormat | undefined;
+  /** How a `format: "timestamp"` column is written, over the panel's `dateFormat`. */
+  dateFormat?: DateFormat | undefined;
+  /** For `format: "image"`: the alt text of every picture in the column. Required with that format. */
+  image?: ImageOptions | undefined;
+  /** For `format: "qr"`: the error correction level. */
+  qr?: QrOptions | undefined;
   unit?: string | undefined;
   decimals?: number | undefined;
   /** The page may sort by it. Default true. */
@@ -372,14 +425,31 @@ export interface TablePage<Row> {
   total: number;
 }
 
+/**
+ * Who sees what an action answered, and the input it was given, in the activity list every
+ * operator reads. That an operator ran it, when, and whether it worked is shown to everybody who
+ * sees the action's group either way: what is private is the result.
+ *
+ * - `"self"` — the operator who ran it (and, for an approved run, who proposed and who approved).
+ * - `"runners"` — every operator who may run actions in its group.
+ * - `"everyone"` — every operator who sees its group.
+ */
+export type ActionVisibility = "self" | "runners" | "everyone";
+
 /** A button on every row. */
 export interface TableRowAction {
   id?: string | undefined;
   label: string;
+  /** `context.input` holds the operator's answers to `input`, checked; the row is the first argument. */
   run: (rowId: string, context: ActionContext) => unknown;
-  confirm?: boolean | undefined;
+  /** `"type"` asks for the action's label to be typed, as for an action. */
+  confirm?: boolean | "type" | undefined;
   destructive?: boolean | undefined;
   timeoutMs?: number | undefined;
+  /** Fields the operator fills in, in a dialog for the row, before it runs: the same fields an action takes. */
+  input?: Readonly<Record<string, InputField>> | undefined;
+  /** Who sees what it answered. Default: the panel's `actionVisibility`. */
+  visibility?: ActionVisibility | undefined;
 }
 
 export interface TableOptions<Row> extends CommonOptions {
@@ -444,6 +514,9 @@ export interface ValueSchema {
   kind: ValueKind;
   unit?: string;
   format?: ValueFormat;
+  dateFormat?: DateFormat;
+  image?: ImageOptions;
+  qr?: QrOptions;
   decimals?: number;
   /** Declared modifiable. Whether this listener lets anybody edit it is `PanelSchema.controls.edit`. */
   editable: boolean;
@@ -534,10 +607,10 @@ export interface TableSchema {
   id: string;
   title: string;
   description?: string;
-  columns: Array<{ key: string; label: string; format?: ValueFormat; unit?: string; decimals?: number; sortable: boolean }>;
+  columns: Array<{ key: string; label: string; format?: ValueFormat; dateFormat?: DateFormat; image?: ImageOptions; qr?: QrOptions; unit?: string; decimals?: number; sortable: boolean }>;
   pageSize: number;
   searchable: boolean;
-  actions: Array<{ id: string; label: string; confirm: boolean; destructive: boolean }>;
+  actions: Array<{ id: string; label: string; confirm: boolean; destructive: boolean; input?: InputSchema[]; typeToConfirm?: boolean }>;
   runnable: boolean;
   span?: Span;
   size?: CardSize;
@@ -618,8 +691,12 @@ export interface PanelSchema {
   translations?: Record<string, string>;
   /** Every language the page ships, for a viewer to choose from. */
   locales?: string[];
+  /** How the page writes times; absent, each viewer's browser decides. */
+  time?: TimeSettings;
   /** The listener offers a live stream at `/api/stream`; the page polls without it. */
   stream?: boolean;
+  /** Headers the page sends with every request: a fixed value, or the cookie or `<meta name>` to read it from. */
+  requestHeaders?: Array<{ name: string; value?: string; cookie?: string; meta?: string }>;
 }
 
 export interface WireValue {
@@ -782,6 +859,12 @@ export interface ChangeRecord {
   /** SHA-256 of this record and the previous one's hash: a chain a deleted or edited line breaks. */
   hash?: string;
   prevHash?: string;
+  /** For an action: who may read its `outcome` and `to`. Absent is `"everyone"`, as before there was a choice. */
+  visibility?: ActionVisibility;
+  /** For an action whose result is `"self"`: the operators it belongs to, without " via …". */
+  owners?: string[];
+  /** The result is not this viewer's to read: `outcome` and `to` were left out. */
+  resultPrivate?: boolean;
 }
 
 /**

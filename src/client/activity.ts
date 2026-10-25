@@ -127,7 +127,9 @@ function changeTable(host: CardHost, refreshed: () => void): HTMLElement {
         result,
       );
     }
-    const cells: Array<string | HTMLElement> = [formatAgo(change.at, now, t.locale), who, what, change.outcome ?? t(change.ok ? "resultApplied" : "resultFailed")];
+    // A result kept for whoever it belongs to: the run is listed, what it answered is not this viewer's to read.
+    const outcome = change.resultPrivate === true ? el("span", "apb-hint apb-result-private", t(change.visibility === "runners" ? "resultRunners" : "resultSelf")) : (change.outcome ?? t(change.ok ? "resultApplied" : "resultFailed"));
+    const cells: Array<string | HTMLElement> = [formatAgo(change.at, now, t.locale, t.time), who, what, outcome];
     cells.forEach((content, index) => {
       const td = el("td");
       td.append(content);

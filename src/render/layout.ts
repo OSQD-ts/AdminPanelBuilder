@@ -150,6 +150,24 @@ export const LAYOUT_CSS = `
 .apb-value-empty { color: var(--apb-muted); }
 .apb-value-error { color: var(--apb-bad); font-size: 1em; font-weight: normal; letter-spacing: 0; }
 .apb-meta { color: var(--apb-muted); font-size: .82em; }
+.apb-meta[hidden] { display: none; }
+/* Pictures and QR codes. Sized by the picture's height attribute and by class: the page's CSP forbids style attributes. */
+.apb-value-media { font-size: 1em; font-weight: normal; letter-spacing: 0; }
+.apb-media { display: block; }
+.apb-image { display: block; width: auto; max-width: 100%; object-fit: contain; border-radius: var(--apb-radius-small); }
+.apb-image[data-fit="cover"] { width: 100%; object-fit: cover; }
+.apb-media-compact .apb-image { max-width: 6em; }
+.apb-media-note { color: var(--apb-muted); font-size: .82em; }
+/* A QR code reads dark on light whatever the theme: many scanners cannot read it inverted. */
+.apb-qr { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--apb-spacing); }
+.apb-qr-svg { color-scheme: light; width: 9em; height: 9em; flex: none; border-radius: var(--apb-radius-small); }
+.apb-qr-compact .apb-qr-svg { width: 2.5em; height: 2.5em; }
+.apb-qr-light { fill: Canvas; }
+.apb-qr-dark { fill: CanvasText; }
+.apb-qr-caption { display: flex; flex-direction: column; align-items: flex-start; gap: calc(var(--apb-spacing) / 2); min-width: 0; }
+.apb-qr-text { font-family: var(--apb-mono-font); font-size: .85em; overflow-wrap: anywhere; user-select: all; }
+.apb-media-cell { padding-block: calc(var(--apb-spacing) / 2); }
+@media (forced-colors: active) { .apb-qr-light { fill: Canvas; } .apb-qr-dark { fill: CanvasText; } }
 
 /* A value past a threshold: a bar down its leading edge and the word, as a shape and a colour. */
 .apb-card[data-status="warn"]::before, .apb-card[data-status="bad"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: calc(var(--apb-radius) - 1px) 0 0 calc(var(--apb-radius) - 1px); background: var(--apb-warn); pointer-events: none; }

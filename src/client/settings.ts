@@ -11,7 +11,7 @@ import type { PanelSchema } from "../types.js";
 import { el, uid } from "./dom.js";
 import type { Translate } from "./i18n.js";
 import { dialog } from "./palette.js";
-import type { Prefs } from "./prefs.js";
+import { type Prefs, VIEWER_DATE_FORMATS } from "./prefs.js";
 import type { ViewDeps } from "./view-deps.js";
 
 export interface SettingsHost {
@@ -48,6 +48,7 @@ export function buildSettings(host: SettingsHost): Settings {
     const body = box.body;
     while (body.firstChild !== null) body.removeChild(body.firstChild);
     body.append(section(t("settingsLook"), [themeRow(), schemeRow(), languageRow(), switchRow(t("density"), t("densityHint"), () => prefs.density === "compact", (on) => (prefs.density = on ? "compact" : undefined))]));
+    body.append(section(t("settingsTime"), [timeZoneRow(), dateFormatRow(), switchRow(t("showFreshness"), t("showFreshnessHint"), () => prefs.freshness, (on) => (prefs.freshness = on), true)]));
     body.append(section(t("settingsMotion"), [switchRow(t("flashChanges"), t("flashHint"), () => prefs.flash, (on) => (prefs.flash = on)), switchRow(t("animations"), t("animationsHint"), () => prefs.motion, (on) => (prefs.motion = on)), switchRow(t("showTrends"), undefined, () => prefs.trends, (on) => (prefs.trends = on))]));
     const layout: HTMLElement[] = [];
     if (host.resetLayout !== undefined && prefs.layout !== undefined) {
@@ -106,7 +107,60 @@ export function buildSettings(host: SettingsHost): Settings {
     return line;
   }
 
-  function switchRow(label: string, hint: string | undefined, read: () => boolean, write: (on: boolean) => void): HTMLElement {
+  /** A choice that changes how times are written redraws the page, so every time on it agrees. */
+  function retime(): void {
+    prefs.save();
+    host.applyPrefs();
+    host.deps.redraw?.();
+  }
+
+  function timeZoneRow(): HTMLElement {
+    const select = el("select", "apb-select apb-time-zone");
+    const panelZone = host.schema().time?.timeZone;
+    const browserZone = (() => {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone;
+      } catch {
+        return "";
+      }
+    })();
+    for (const [value, label] of [
+      ["", t("timeZonePanel", { zone: panelZone ?? browserZone })],
+      ["browser", t("timeZoneBrowser", { zone: browserZone })],
+      ["UTC", t("timeZoneUtc")],
+    ] as const) {
+      const option = el("option", null, label);
+      option.value = value;
+      select.append(option);
+    }
+    select.value = prefs.timeZone ?? "";
+    select.addEventListener("change", () => {
+      prefs.timeZone = select.value === "browser" || select.value === "UTC" ? select.value : undefined;
+      retime();
+    });
+    return row(t("timeZone"), select);
+  }
+
+  function dateFormatRow(): HTMLElement {
+    const select = el("select", "apb-select apb-date-format");
+    const names = { relative: "dateFormatRelative", date: "dateFormatDate", datetime: "dateFormatDatetime", "datetime-seconds": "dateFormatDatetimeSeconds", iso: "dateFormatIso" } as const;
+    const first = el("option", null, t("dateFormatPanel"));
+    first.value = "";
+    select.append(first);
+    for (const name of VIEWER_DATE_FORMATS) {
+      const option = el("option", null, t(names[name]));
+      option.value = name;
+      select.append(option);
+    }
+    select.value = prefs.dateFormat ?? "";
+    select.addEventListener("change", () => {
+      prefs.dateFormat = select.value === "" ? undefined : select.value;
+      retime();
+    });
+    return row(t("dateFormat"), select);
+  }
+
+  function switchRow(label: string, hint: string | undefined, read: () => boolean, write: (on: boolean) => void, redraws = false): HTMLElement {
     const toggle = el("button", "apb-switch");
     toggle.type = "button";
     toggle.setAttribute("role", "switch");
@@ -116,6 +170,7 @@ export function buildSettings(host: SettingsHost): Settings {
       prefs.save();
       toggle.setAttribute("aria-checked", String(read()));
       host.applyPrefs();
+      if (redraws) host.deps.redraw?.();
     });
     return row(label, toggle, hint);
   }

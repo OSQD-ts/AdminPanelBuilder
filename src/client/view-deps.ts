@@ -28,4 +28,6 @@ export interface ViewDeps {
   languages: readonly string[];
   /** Switches this viewer's language and redraws. */
   setLanguage?: ((code: string | undefined) => void) | undefined;
+  /** Draws the page again from what it holds, after a choice that changes how it is written: the zone, the date format. */
+  redraw?: (() => void) | undefined;
 }

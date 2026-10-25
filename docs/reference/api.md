@@ -32,8 +32,11 @@ Options for each: [values](../concepts/values.md), [charts](../concepts/charts.m
 ### The panel
 
 `createAdminPanel(options?)` or `new AdminPanel(options?)`. Options: `title`, `instance`, `theme`,
-`colorScheme`, `pollIntervalMs`, `defaultGroup`, `store`, `changeLog`, `locale`, `messages`, `clock`,
-`onError`, `sync` (changes carried between replicas), `keepHistory` (chart histories kept in the store).
+`colorScheme`, `pollIntervalMs`, `defaultGroup`, `store`, `changeLog`, `locale`, `timeZone`, `dateFormat` and
+`dateLocale` (how times are written, see [values](../concepts/values.md#pictures-qr-codes-and-times)), `messages`, `clock`,
+`onError`, `sync` (changes carried between replicas), `keepHistory` (chart histories kept in the store),
+`actionVisibility` (who reads an action's result when it does not say: `"self"`, the default, `"runners"`
+or `"everyone"` — see [actions](../concepts/actions.md#who-reads-the-result)).
 
 | Member | Does |
 | --- | --- |
@@ -91,7 +94,7 @@ grants)` is a scope narrowed to one operator's grants, never widened.
 | `AdminPanelConfigError`, `ValueError` | The two refusals. |
 | `PanelGroup`, `PanelAction`, `PanelTable`, `PanelFeed` | What the declarations return. |
 | `VERSION` | The package version. |
-| `MAX_HISTORY_POINTS`, `MIN_SAMPLE_INTERVAL_MS`, `MIN_POLL_INTERVAL_MS`, `MAX_SERIES`, `MAX_CHANGES`, `MAX_NOTICES`, `MAX_WIRE_BYTES`, `DEFAULT_MAX_LENGTH`, `MIN_TOKEN_LENGTH`, `DEFAULT_ACTION_TIMEOUT_MS`, `DEFAULT_PORT`, `MAX_PAGE_SIZE`, `MAX_SEARCH_LENGTH`, `MAX_FEED_CAPACITY`, `MAX_ENTRY_TEXT`, `MAX_REVERT_MS`, `APPROVAL_TTL_MS`, `MAX_PENDING`, `MIN_SESSION_SECRET_LENGTH`, `MAX_SCHEDULED`, `MAX_SCHEDULE_AHEAD_MS`, `MAX_SYNC_MESSAGE_BYTES`, `MAX_WEBHOOK_RETRIES`, `MAX_REVOKED_SESSIONS`, `DEFAULT_WRITES_PER_MINUTE`, `MAX_REASON_LENGTH`, `MIN_ROTATE_BYTES`, `MAX_GRID_COLUMNS`, `MAX_CARD_ROWS`, `MAX_LAYOUT_BYTES`, `MAX_LAYOUT_ENTRIES` | See [limits](limits.md). |
+| `MAX_HISTORY_POINTS`, `MIN_SAMPLE_INTERVAL_MS`, `MIN_POLL_INTERVAL_MS`, `MAX_SERIES`, `MAX_CHANGES`, `MAX_NOTICES`, `MAX_WIRE_BYTES`, `DEFAULT_MAX_LENGTH`, `MIN_TOKEN_LENGTH`, `DEFAULT_ACTION_TIMEOUT_MS`, `DEFAULT_PORT`, `MAX_PAGE_SIZE`, `MAX_SEARCH_LENGTH`, `MAX_FEED_CAPACITY`, `MAX_ENTRY_TEXT`, `MAX_REVERT_MS`, `APPROVAL_TTL_MS`, `MAX_PENDING`, `MIN_SESSION_SECRET_LENGTH`, `MAX_SCHEDULED`, `MAX_SCHEDULE_AHEAD_MS`, `MAX_SYNC_MESSAGE_BYTES`, `MAX_WEBHOOK_RETRIES`, `MAX_REVOKED_SESSIONS`, `DEFAULT_WRITES_PER_MINUTE`, `MAX_REASON_LENGTH`, `MIN_ROTATE_BYTES`, `MAX_GRID_COLUMNS`, `MAX_CARD_ROWS`, `MAX_LAYOUT_BYTES`, `MAX_LAYOUT_ENTRIES`, `MIN_IMAGE_HEIGHT`, `MAX_IMAGE_HEIGHT`, `MAX_ALT_LENGTH`, `MAX_QR_VERSION`, `MAX_QR_BYTES` | See [limits](limits.md). |
 
 ## `@osqd/admin-panel-builder/adapters`
 
@@ -104,16 +107,20 @@ framework-neutral router they share, with `MAX_BODY_BYTES` and `DEFAULT_PORT`.
 with `MAX_FLEET_PANELS`.
 
 Serve options: `basePath`, `auth`, `controls: { edit, actions }` (each `true` or a list of groups),
-`groups`, `allowedHosts`, `authThrottle` (with `store` to share it), `writeLimit`, `stream`, `metrics`,
-`health`, `clock`; `listen` adds `port` and `host`, `fetchHandler` adds `address`. The server `listen`
-returns has `reload(options, { by })`: see [configuration](../operations/configuration.md#reloading). `remotePanelHandler` also
-takes `groups` and `stream`.
+`groups`, `allowedHosts`, `allowedOrigins`, `trustedProxies`, `csrf` (`{ header, cookie }` or
+`{ header, verify }`), `requestHeaders`, `authThrottle` (with `store` to share it), `writeLimit`, `stream`,
+`metrics`, `health`, `clock`; `listen` adds `port` and `host`, `fetchHandler` adds `address`. See
+[Security](../operations/security.md#before-credentials) for the four that judge a write before its
+credentials. The server `listen` returns has `reload(options, { by })`: see
+[configuration](../operations/configuration.md#reloading). `remotePanelHandler` also takes `groups`,
+`stream`, its own `allowedOrigins`, `trustedProxies`, `csrf` and `requestHeaders`, and `upstreamHeaders`
+(fixed headers for a gateway in front of the upstream); a fleet's panels take `headers` for the same.
 
 ## `@osqd/admin-panel-builder/client`
 
-`panelClient({ url, token?, onBehalfOf?, timeoutMs?, fetch? })`: every route of the HTTP API as a typed
+`panelClient({ url, token?, onBehalfOf?, timeoutMs?, fetch?, headers? })`: every route of the HTTP API as a typed
 call — `schema()`, `state()`, `changes()`, `notices()`, `settings()`, `openApi()`, `table()`, `set(id,
-value, { revertAfterMs?, at? })`, `cancelScheduled()`, `run()`, `runRowAction()`, `applyProfile()`,
+value, { revertAfterMs?, at? })`, `cancelScheduled()`, `run()`, `runRowAction(table, action, row, input?)`, `applyProfile()`,
 `approve()`, `reject()`, `undo()`, `diffSettings()`, `importSettings()`, `watch(onState, { intervalMs?,
 signal? })`. A refusal rejects with `PanelApiError` (`status`, and the panel's sentence as `message`).
 See [the command line](../integration/cli.md), which is written on it.

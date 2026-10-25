@@ -8,6 +8,8 @@
  *
  *   <admin-panel src="/admin" group="Games" compact></admin-panel>   one group, cards only
  *
+ *   element.headers = () => ({ "x-csrf-token": currentToken() });   sent with every request
+ *
  * The element draws into a shadow root, loads the stylesheet from `src` and asks `src` for the
  * schema and the state, so the handler mounted there decides what it shows and allows. A
  * shadow root is a styling boundary, not a security boundary: the host page's scripts can read
@@ -19,6 +21,7 @@
  * shipped once. `npm run check:package` loads this entry under Node to keep it that way.
  */
 import { mount, type MountedPanel } from "../client/app.js";
+import type { HostHeaders } from "../client/headers.js";
 // The element draws charts and tables from its own bundle rather than loading the extras.
 import "../client/extras.js";
 
@@ -40,8 +43,29 @@ export function defineAdminPanelElement(name: string = ELEMENT_NAME): CustomElem
 
     private mounted: MountedPanel | undefined;
     private container: HTMLElement | undefined;
+    private extraHeaders: HostHeaders | undefined;
+
+    /**
+     * Headers sent with every request the panel makes: an object, or a function asked before each
+     * request, so a token that rotates is sent as it is now. Set it before or after the element is
+     * connected; the next request carries it. A header a page cannot set is dropped with a warning.
+     */
+    get headers(): HostHeaders | undefined {
+      return this.extraHeaders;
+    }
+
+    set headers(value: HostHeaders | undefined) {
+      this.extraHeaders = value === null ? undefined : value;
+    }
 
     connectedCallback(): void {
+      // A framework may have set `headers` before this class was defined: that is a plain property
+      // on the instance, shadowing the setter. Take it, and let the setter hold it.
+      if (Object.hasOwn(this, "headers")) {
+        const early = (this as unknown as { headers: HostHeaders | undefined }).headers;
+        Reflect.deleteProperty(this, "headers");
+        this.headers = early;
+      }
       this.start();
     }
 
@@ -79,7 +103,7 @@ export function defineAdminPanelElement(name: string = ELEMENT_NAME): CustomElem
       this.container = container;
       this.applyScheme();
       const group = this.getAttribute("group");
-      this.mounted = mount({ root: shadow, container, api: base, standalone: false, group: group === null || group === "" ? undefined : group, compact: this.hasAttribute("compact") });
+      this.mounted = mount({ root: shadow, container, api: base, standalone: false, group: group === null || group === "" ? undefined : group, compact: this.hasAttribute("compact"), headers: () => this.extraHeaders });
     }
 
     /** `scheme="dark"` on the element beats both the panel's setting and the viewer's system. */

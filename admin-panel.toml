@@ -19,6 +19,13 @@ base_path = "/"
 # Host header values accepted, as "name" or "name:port". A loopback listener accepts its own
 # loopback names regardless, which is the defence against DNS rebinding.
 allowed_hosts = []
+# The origins a browser write is accepted from, as "https://admin.example.com". Empty compares a
+# write's origin with the Host header. Set it when a proxy in front of the panel rewrites Host.
+allowed_origins = []
+# Addresses or CIDRs of the proxies in front of the panel. A request from one of them is judged by
+# the host and scheme it forwarded (X-Forwarded-Host, X-Forwarded-Proto); from anywhere else those
+# headers are ignored, because anybody can send them.
+trusted_proxies = []
 
 [auth]
 # "none", or "token" for a bearer token. Setting PANEL_TOKEN switches this to "token".

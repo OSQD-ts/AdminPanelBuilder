@@ -28,6 +28,11 @@ checks this table against the code.
 | `MAX_FEED_CAPACITY` | 2000 | Entries a feed may keep; past a few thousand a feed is a log and belongs in one. |
 | `MAX_ENTRY_TEXT` | 1000 | A feed line longer than this is a payload, and belongs in a table. |
 | `MAX_REVERT_MS` | 604800000 | A week. A "temporary" change longer than that is a setting. |
+| `MIN_IMAGE_HEIGHT` | 24 | A picture shorter than this is a speck. |
+| `MAX_IMAGE_HEIGHT` | 480 | Taller than a card is a page, not a reading. |
+| `MAX_ALT_LENGTH` | 200 | Alt text is a sentence, not a description of a painting. |
+| `MAX_QR_VERSION` | 10 | 57 × 57 modules: larger codes stop reading reliably off a screen. |
+| `MAX_QR_BYTES` | 271 | What version 10 holds at level L in byte mode; a longer string is shown as text. |
 | `APPROVAL_TTL_MS` | 3600000 | An hour: a proposal nobody looked at within it should be made again, by someone who still wants it. |
 | `MAX_PENDING` | 100 | Proposals waiting at once; past it the oldest lapses. |
 | `MIN_SESSION_SECRET_LENGTH` | 32 | A shorter signing secret can be brute-forced offline from a single cookie. |

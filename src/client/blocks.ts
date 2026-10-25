@@ -7,7 +7,7 @@
  * place in the server's words, a second click on the same button for anything declared confirm,
  * and nothing rebuilt while somebody is typing into it.
  */
-import type { ActionSchema, FeedEntry, FeedSchema, InputSchema, JsonValue } from "../types.js";
+import type { FeedEntry, FeedSchema, InputSchema, JsonValue } from "../types.js";
 import { busy, clear, el, uid } from "./dom.js";
 import { formatAgo, formatValue } from "./format.js";
 import { localeSpec, type Translate } from "./i18n.js";
@@ -124,7 +124,7 @@ export function buildFeed(schema: FeedSchema, t: Translate): FeedView {
       if (key === shownKey && list.childElementCount > 0) {
         // Only the relative times move; the rows stay, and so does any text somebody selected.
         list.querySelectorAll<HTMLElement>("[data-at]").forEach((node) => {
-          node.textContent = formatAgo(Number(node.dataset.at), now, t.locale);
+          node.textContent = formatAgo(Number(node.dataset.at), now, t.locale, t.time);
         });
         return;
       }
@@ -142,7 +142,7 @@ export function buildFeed(schema: FeedSchema, t: Translate): FeedView {
       for (const entry of [...shown].reverse()) {
         const item = el("li", "apb-feed-entry");
         item.dataset.level = entry.level;
-        const time = el("time", "apb-feed-time", formatAgo(entry.at, now, t.locale));
+        const time = el("time", "apb-feed-time", formatAgo(entry.at, now, t.locale, t.time));
         time.dateTime = new Date(entry.at).toISOString();
         time.dataset.at = String(entry.at);
         const level = entry.level === "info" ? undefined : el("span", "apb-status-word", t(entry.level === "bad" ? "statusBad" : "statusWarn"));
@@ -159,7 +159,7 @@ export function buildFeed(schema: FeedSchema, t: Translate): FeedView {
 // ---------------------------------------------------------------------------------------------
 
 /** The fields an action asks for, and a way to read them. Checks what it can; the server checks everything. */
-export function buildInputs(schema: ActionSchema, t: Translate): { element: HTMLElement; read(): Record<string, JsonValue> } | undefined {
+export function buildInputs(schema: { input?: InputSchema[] | undefined }, t: Translate): { element: HTMLElement; read(): Record<string, JsonValue> } | undefined {
   if (schema.input === undefined || schema.input.length === 0) return undefined;
   const wrap = el("div", "apb-inputs");
   const readers: Array<() => [string, JsonValue | undefined]> = [];

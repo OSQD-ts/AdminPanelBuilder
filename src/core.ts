@@ -18,7 +18,7 @@
  * poll. The clock, the store and the sync channel are fixed at construction, because replacing
  * one would drop what was read or written through it.
  */
-import { DEFAULT_ACTION_TIMEOUT_MS, PanelAction } from "./actions.js";
+import { checkVisibility, DEFAULT_ACTION_TIMEOUT_MS, operatorOf, PanelAction } from "./actions.js";
 import { createFetchHandler, type FetchServeOptions, type PanelFetchHandler } from "./adapters/fetch.js";
 import { listenPanel, type PanelServer } from "./adapters/listen.js";
 import { createPanelHandler, type PanelRequestHandler } from "./adapters/node.js";
@@ -54,8 +54,11 @@ import type { ValueStore } from "./stores/types.js";
 import { BUILT_IN_THEMES, resolveTheme } from "./themes/index.js";
 import type { Theme } from "./themes/types.js";
 import type {
+  DateFormat,
+  TimeSettings,
   ActionContext,
   ActionOptions,
+  ActionVisibility,
   Alert,
   BindOptions,
   CardSize,
@@ -86,6 +89,7 @@ import type {
   ViewableOptions,
   WireValue,
 } from "./types.js";
+import { checkDisplay, checkTimeSettings } from "./values/display.js";
 import { PanelValue, type ValueDefinition, type ValueOwner, type ValueSource } from "./values/handle.js";
 import { checkInput, type ResolvedField, resolveInput } from "./values/input.js";
 import { encodeForWire, inferKind, plottable, resolveConstraints, statelessPattern, toJson } from "./values/kinds.js";
@@ -134,12 +138,23 @@ export interface AdminPanelOptions {
   changeLog?: ChangeLogStore | undefined;
   /** The language of the page's own words: `"en"` (the default), `"pl"` or `"de"`. */
   locale?: string | undefined;
+  /** The zone the page writes times in, an IANA name ("Europe/Warsaw", "UTC"). Default: each viewer's browser. A viewer may choose another in their settings. */
+  timeZone?: string | undefined;
+  /** How timestamps are written: `"datetime-seconds"` (the default), `"relative"`, `"date"`, `"time"`, `"datetime"`, `"iso"`, or `Intl.DateTimeFormat` options. A value's own `dateFormat` wins. */
+  dateFormat?: DateFormat | undefined;
+  /** How dates are written, as a BCP 47 tag ("en-GB", "pl-PL"), when it should differ from the page's language. */
+  dateLocale?: string | undefined;
   /** Replacements for any of the page's own words, by key. An unknown key is refused. */
   messages?: Partial<Record<MessageKey, string>> | undefined;
   /** Carries operator changes to every replica of this application. See `redisSync`. */
   sync?: PanelSync | undefined;
   /** Keep chart histories in the store across restarts, saved every `everyMs` (default a minute) and on `close()`. */
   keepHistory?: boolean | { everyMs?: number | undefined } | undefined;
+  /**
+   * Who reads what an action answered, for every action and row action that does not say: `"self"`
+   * (the default), `"runners"` or `"everyone"`. See `ActionVisibility`.
+   */
+  actionVisibility?: ActionVisibility | undefined;
 }
 
 /** What a panel reports to subscribers. */
@@ -158,7 +173,7 @@ export const MAX_NOTICES = 100;
 export const MAX_REVERT_MS = 7 * 24 * 3_600_000;
 
 const COMMON_KEYS = ["id", "label", "description", "group", "order", "span", "size"];
-const VIEWABLE_KEYS = [...COMMON_KEYS, "kind", "unit", "format", "decimals", "chart", "sensitive", "min", "max", "status", "alert", "visibleWhen", "disabledWhen", "timeline"];
+const VIEWABLE_KEYS = [...COMMON_KEYS, "kind", "unit", "format", "dateFormat", "image", "qr", "decimals", "chart", "sensitive", "min", "max", "status", "alert", "visibleWhen", "disabledWhen", "timeline"];
 const MODIFIABLE_KEYS = [...VIEWABLE_KEYS, "step", "integer", "options", "maxLength", "pattern", "multiline", "validate", "onChange", "persist", "confirm", "approval", "timed", "validateAsync", "validateTimeoutMs", "reason"];
 
 /** How an operator's change is made: now, for a while, at a time, by a rule, and why. */
@@ -173,7 +188,7 @@ export interface ChangeOptions {
 const INTERNAL: PanelScope = { groups: undefined, edit: true, actions: true, restrictions: [] };
 const BIND_KEYS = [...MODIFIABLE_KEYS, "editable"];
 const SHARED_CHART_KEYS = ["kind", "over", "title", "group", "series", "description", "order", "span", "size", "points", "sampleEveryMs", "min", "max", "stacked", "lines", "annotate", "bins"];
-const PANEL_KEYS = ["title", "instance", "theme", "themes", "grid", "colorScheme", "pollIntervalMs", "defaultGroup", "store", "clock", "onError", "changeLog", "locale", "messages", "sync", "keepHistory"];
+const PANEL_KEYS = ["title", "instance", "theme", "themes", "grid", "colorScheme", "pollIntervalMs", "defaultGroup", "store", "clock", "onError", "changeLog", "locale", "timeZone", "dateFormat", "dateLocale", "messages", "sync", "keepHistory", "actionVisibility"];
 const SWAPPABLE_KEYS = ["title", "instance", "theme", "colorScheme", "pollIntervalMs"];
 const HISTORY_KEY = "apb.history";
 /** What saving a layout answers: done, or refused with a sentence. */
@@ -253,12 +268,15 @@ export class AdminPanel implements ValueOwner {
   private readonly timelines = new Map<string, Array<{ at: number; value: JsonValue; by?: string }>>();
   private readonly liveCache = new Map<string, { at: number; wire: WireValue }>();
   private readonly locale: string;
+  private readonly time: TimeSettings;
   private readonly messages: Record<string, string> | undefined;
   private readonly counterIds = new Set<string>();
   private readonly totals = new Map<string, number>();
   private readonly events: Emitter<AdminPanelEvents>;
   private readonly failedGetters = new Set<string>();
   private readonly keepHistoryMs: number | undefined;
+  /** @internal Who reads an action's result when the action does not say. */
+  readonly actionVisibility: ActionVisibility;
   private feedSequence = 0;
   private sequence = 0;
   private unnamed = 0;
@@ -292,6 +310,7 @@ export class AdminPanel implements ValueOwner {
     this.origin = `${options.instance ?? "panel"}-${Math.random().toString(36).slice(2, 10)}`;
     this.events = new Emitter((error, event) => this.onError(error, `a "${event}" listener on the panel`));
     this.locale = options.locale ?? "en";
+    this.time = checkTimeSettings(options);
     if (this.locale !== "auto" && LOCALES[this.locale] === undefined) throw new AdminPanelConfigError(`there is no "${this.locale}" translation of the page (there are ${Object.keys(LOCALES).join(", ")}); pass messages to supply your own words`);
     if (options.messages !== undefined) {
       for (const [key, text] of Object.entries(options.messages)) {
@@ -306,6 +325,7 @@ export class AdminPanel implements ValueOwner {
       if (!Number.isFinite(everyMs) || everyMs < 5000) throw new AdminPanelConfigError(`keepHistory.everyMs is ${everyMs}; saving more often than every five seconds writes more than a chart gains`);
       this.keepHistoryMs = everyMs;
     } else this.keepHistoryMs = undefined;
+    this.actionVisibility = checkVisibility(options.actionVisibility, "createAdminPanel(): actionVisibility") ?? "self";
 
     this.charts = new ChartRegistry({
       now: () => this.clock.now(),
@@ -416,7 +436,7 @@ export class AdminPanel implements ValueOwner {
   /** A button that runs `run` in the application. Usable only on a listener that grants `controls.actions`. */
   action(label: string, run: (context: ActionContext) => unknown, options: ActionOptions = {}): PanelAction {
     if (typeof run !== "function") throw new AdminPanelConfigError(`action "${label}" needs a function to run`);
-    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "size", "confirm", "destructive", "timeoutMs", "input", "visibleWhen", "disabledWhen", "approval", "reason"], `action("${label}")`);
+    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "size", "confirm", "destructive", "timeoutMs", "input", "visibleWhen", "disabledWhen", "approval", "reason", "visibility"], `action("${label}")`);
     if (options.confirm !== undefined && typeof options.confirm !== "boolean" && options.confirm !== "type") throw new AdminPanelConfigError(`action "${label}" has confirm ${JSON.stringify(options.confirm)}; it is true, false or "type"`);
     checkReasonOption(label, options.reason);
     const id = checkId(options.id ?? (slug(label) || `action-${this.actions.size + 1}`), `action "${label}"`);
@@ -443,6 +463,7 @@ export class AdminPanel implements ValueOwner {
         typeToConfirm: options.confirm === "type",
         approval: options.approval === true,
         reasonRequired: options.reason === "required" || options.approval === true,
+        visibility: checkVisibility(options.visibility, `action("${label}"): visibility`),
       },
       run,
       group,
@@ -766,6 +787,7 @@ export class AdminPanel implements ValueOwner {
       locale: this.locale,
       locales: Object.keys(LOCALES),
     };
+    if (Object.keys(this.time).length > 0) schema.time = { ...this.time };
     if (this.instance !== undefined) schema.instance = this.instance;
     const offered = this.offeredThemes();
     if (offered.length > 1) schema.theme.offered = offered.map((theme) => ({ name: theme.name, label: theme.label }));
@@ -923,7 +945,7 @@ export class AdminPanel implements ValueOwner {
     const later = pending.applyAt !== undefined && pending.applyAt > this.clock.now() ? pending.applyAt : undefined;
     if (pending.kind === "action") {
       const action = this.actions.get(pending.target) as PanelAction;
-      return this.execute(action, (pending.candidate ?? {}) as Record<string, JsonValue>, approvedBy, pending.reason);
+      return this.execute(action, (pending.candidate ?? {}) as Record<string, JsonValue>, approvedBy, pending.reason, [operatorOf(pending.by), operatorOf(by)]);
     }
     if (pending.kind === "profile") {
       const profile = this.profiles.get(pending.target) as ProfileEntry;
@@ -1144,7 +1166,7 @@ export class AdminPanel implements ValueOwner {
   }
 
   /** Runs an action that is allowed to run, within its deadline, and records it. */
-  private async execute(action: PanelAction, input: Record<string, JsonValue>, by: string, reason: string | undefined): Promise<ActionOutcome> {
+  private async execute(action: PanelAction, input: Record<string, JsonValue>, by: string, reason: string | undefined, owners: string[] = [operatorOf(by)]): Promise<ActionOutcome> {
     const id = action.id;
     const controller = new AbortController();
     let outcome: ActionOutcome;
@@ -1156,7 +1178,7 @@ export class AdminPanel implements ValueOwner {
       outcome = { ok: false, reason: "failed", ...refusal("refuseActionFailed", { label: action.label, detail: message(error) }) };
       this.onError(error, `the action "${id}"`);
     }
-    this.log.record({ kind: "action", target: id, label: action.label, by, at: this.clock.now(), ok: outcome.ok, outcome: outcome.ok && "message" in outcome ? outcome.message : outcome.ok ? "" : outcome.message, ...(Object.keys(input).length > 0 ? { to: input } : {}), ...(reason === undefined ? {} : { reason }) });
+    this.log.record({ kind: "action", target: id, label: action.label, by, at: this.clock.now(), ok: outcome.ok, outcome: outcome.ok && "message" in outcome ? outcome.message : outcome.ok ? "" : outcome.message, ...(Object.keys(input).length > 0 ? { to: input } : {}), ...(reason === undefined ? {} : { reason }), ...this.visibilityOf(action.definition.visibility, owners) });
     return outcome;
   }
 
@@ -1174,25 +1196,66 @@ export class AdminPanel implements ValueOwner {
     return table.page(full);
   }
 
-  /** Runs a row action for an operator. Never rejects. */
-  async runRowAction(tableId: string, actionId: string, rowId: string, by: string, scope: PanelScope): Promise<ActionOutcome> {
+  /** Runs a row action for an operator, with the input it asks for. Never rejects. */
+  async runRowAction(tableId: string, actionId: string, rowId: string, by: string, scope: PanelScope, rawInput?: unknown): Promise<ActionOutcome> {
     const table = this.tables.get(tableId);
     const action = table?.rowActions.find((candidate) => candidate.id === actionId);
     if (table === undefined || action === undefined || !visible(scope, table.group)) return { ok: false, reason: "not-found", ...refusal("refuseNoRowAction", { action: actionId, table: tableId }) };
     if (!canRun(scope, table.group)) return { ok: false, reason: "not-allowed", ...refusal("refuseRunOff", { label: action.label }) };
     if (typeof rowId !== "string" || rowId === "" || rowId.length > 200) return { ok: false, reason: "invalid", ...refusal("refuseRowId") };
+    // The same checks an action's input gets, by the same code: a row action's dialog is an action's form for one row.
+    let input: Record<string, JsonValue> = {};
+    try {
+      if (action.input !== undefined) input = checkInput(action.input, rawInput);
+      else if (rawInput !== undefined && rawInput !== null && Object.keys(rawInput as object).length > 0) throw new ValueError(`${action.label} takes no input`, { key: "refuseNoInput", params: { label: action.label } });
+    } catch (error) {
+      if (error instanceof ValueError) return { ok: false, reason: "invalid", message: error.message, refusal: error.refusal };
+      throw error;
+    }
     const controller = new AbortController();
     let outcome: ActionOutcome;
     try {
-      const result = await withDeadline(Promise.resolve().then(() => action.run(rowId, { by, signal: controller.signal, input: {} })), action.timeoutMs, action.label);
+      const result = await withDeadline(Promise.resolve().then(() => action.run(rowId, { by, signal: controller.signal, input })), action.timeoutMs, action.label);
       outcome = { ok: true, message: typeof result === "string" && result !== "" ? result : `${action.label} finished.` };
     } catch (error) {
       controller.abort();
       outcome = { ok: false, reason: "failed", ...refusal("refuseActionFailed", { label: action.label, detail: message(error) }) };
       this.onError(error, `the row action "${tableId}/${actionId}"`);
     }
-    this.log.record({ kind: "action", target: `${tableId}/${actionId}`, label: `${action.label} (${table.label}: ${rowId})`, by, at: this.clock.now(), ok: outcome.ok, outcome: outcome.message });
+    this.log.record({ kind: "action", target: `${tableId}/${actionId}`, label: `${action.label} (${table.label}: ${rowId})`, by, at: this.clock.now(), ok: outcome.ok, outcome: outcome.message, ...(Object.keys(input).length > 0 ? { to: input } : {}), ...this.visibilityOf(action.visibility, [operatorOf(by)]) });
     return outcome;
+  }
+
+  /** What an action's record says about who reads its result. Nothing for `"everyone"`, as records always were. */
+  private visibilityOf(declared: ActionVisibility | undefined, owners: string[]): Pick<ChangeRecord, "visibility" | "owners"> {
+    const visibility = declared ?? this.actionVisibility;
+    if (visibility === "everyone") return {};
+    return visibility === "self" ? { visibility, owners: [...new Set(owners)] } : { visibility };
+  }
+
+  /**
+   * Recent changes as one operator may read them: an action's result and input are left out for
+   * anybody it does not belong to (`ActionVisibility`), while the fact of the run stays. The full
+   * records are what `changes()`, the change log and its sinks keep.
+   */
+  changesFor(actor: string, scope: PanelScope): ChangeRecord[] {
+    const viewer = operatorOf(actor);
+    return this.changes().map((record) => {
+      if (record.kind !== "action" || record.visibility === undefined) return record;
+      const group = this.actionGroupOf(record.target);
+      const readable = record.visibility === "self" ? (record.owners ?? []).includes(viewer) : group !== undefined && canRun(scope, group);
+      if (readable) return record;
+      const { outcome: _outcome, to: _to, ...kept } = record;
+      return { ...kept, resultPrivate: true };
+    });
+  }
+
+  /** The group an action's record belongs to: an action's, or a row action's table's. */
+  private actionGroupOf(target: string): string | undefined {
+    const action = this.actions.get(target);
+    if (action !== undefined) return action.group;
+    const slash = target.indexOf("/");
+    return slash === -1 ? undefined : this.tables.get(target.slice(0, slash))?.group;
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1355,6 +1418,7 @@ export class AdminPanel implements ValueOwner {
     const kind = inferKind(initial, options);
     const constraints = resolveConstraints(shown, kind, options);
     const pattern = options.pattern === undefined ? undefined : statelessPattern(options.pattern);
+    const display = checkDisplay(`"${shown}"`, options, kind);
     if (options.decimals !== undefined && (!Number.isInteger(options.decimals) || options.decimals < 0 || options.decimals > 12)) {
       throw new AdminPanelConfigError(`"${shown}" asks for ${options.decimals} decimals; it must be a whole number from 0 to 12`);
     }
@@ -1374,7 +1438,10 @@ export class AdminPanel implements ValueOwner {
       constraints,
       pattern,
       unit: options.unit,
-      format: options.format,
+      format: display.format,
+      dateFormat: display.dateFormat,
+      image: display.image,
+      qr: display.qr,
       decimals: options.decimals,
       order: options.order ?? 0,
       sequence: this.sequence++,
@@ -1805,10 +1872,6 @@ export class AdminPanel implements ValueOwner {
  * gateway", and that is still ada. What the two-person rule compares, so the same person cannot
  * approve their own proposal by making one of the two through a gateway.
  */
-function operatorOf(actor: string): string {
-  const via = actor.lastIndexOf(" via ");
-  return via === -1 ? actor : actor.slice(0, via);
-}
 
 export function createAdminPanel(options?: AdminPanelOptions): AdminPanel {
   return new AdminPanel(options);

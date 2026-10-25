@@ -2,7 +2,8 @@
  * The client's only network access: its own panel's API, same-origin, never cached.
  *
  * A failure surfaces the server's `{ error }` sentence, so what the operator reads is what the
- * server decided rather than a status code.
+ * server decided rather than a status code. Every request carries the headers `headers()` answers
+ * when it is sent: the listener's `requestHeaders` and whatever the host page supplies.
  */
 import type { ChangeRecord, JsonValue, Notice, PanelLayout, PanelSchema, PanelState, PendingChange, RepeatRuleShape, SettingDiff, TableRowsAnswer, WireValue } from "../types.js";
 
@@ -22,7 +23,10 @@ export class ApiError extends Error {
 }
 
 export class Api {
-  constructor(private readonly base: string) {}
+  constructor(
+    private readonly base: string,
+    private readonly headers: () => Record<string, string> = () => ({}),
+  ) {}
 
   schema(): Promise<PanelSchema> {
     return this.get<{ schema: PanelSchema }>("/api/schema").then((body) => body.schema);
@@ -87,8 +91,8 @@ export class Api {
     return this.post<{ result?: { message: string } }>(`/api/actions/${encodeURIComponent(id)}`, { ...(input === undefined ? {} : { input }), ...fields({ reason }) }).then((body) => body.result?.message);
   }
 
-  runRow(table: string, action: string, row: string): Promise<string> {
-    return this.post<{ result: { message: string } }>(`/api/tables/${encodeURIComponent(table)}/actions/${encodeURIComponent(action)}`, { row }).then((body) => body.result.message);
+  runRow(table: string, action: string, row: string, input?: Record<string, JsonValue>): Promise<string> {
+    return this.post<{ result: { message: string } }>(`/api/tables/${encodeURIComponent(table)}/actions/${encodeURIComponent(action)}`, input === undefined ? { row } : { row, input }).then((body) => body.result.message);
   }
 
   /** Applied, or proposed (`pending`) when the profile needs approval. */
@@ -115,7 +119,7 @@ export class Api {
   private async request<T>(path: string, init: RequestInit): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(`${this.base}${path}`, { ...init, credentials: "same-origin", cache: "no-store" });
+      response = await fetch(`${this.base}${path}`, { ...init, headers: { ...this.extraHeaders(), ...(init.headers as Record<string, string> | undefined) }, credentials: "same-origin", cache: "no-store" });
     } catch {
       throw new ApiError("The panel could not be reached.", 0, "unreachable");
     }
@@ -132,6 +136,16 @@ export class Api {
       throw new ApiError(sentence, response.status, typeof failure.code === "string" ? failure.code : undefined, typeof failure.key === "string" ? failure.key : undefined, params);
     }
     return body as T;
+  }
+
+  /** The headers to add now. A host's function that throws is not a reason to send nothing at all. */
+  private extraHeaders(): Record<string, string> {
+    try {
+      return this.headers();
+    } catch (error) {
+      console.warn("admin-panel: the request headers could not be read", error);
+      return {};
+    }
   }
 }
 

@@ -36,7 +36,11 @@ The package ships [`admin-panel.toml`](../../admin-panel.toml): every setting, a
 changing it does. Deleting it changes nothing; a test holds it to the built-in defaults. The sections are
 `[listen]`, `[auth]`, `[controls]`, `[view]`, `[stream]`, `[metrics]`, `[health]`, `[throttle]` and
 `[write_limit]`. `[health] enabled = true` offers `GET /healthz` to a load balancer, without
-authentication, as `health: true` does in code.
+authentication, as `health: true` does in code. `[listen] allowed_origins` and `trusted_proxies` are the listener's
+`allowedOrigins` and `trustedProxies` — for a panel behind a proxy that rewrites `Host`, see
+[Security](security.md#the-pages-own-origin-behind-a-proxy) — checked when the file is loaded and
+reloaded without a restart. The anti-forgery check and the page's request headers take functions or
+read cookies, so they are set in code (`csrf`, `requestHeaders`).
 
 The reader is strict. A key nothing reads is an error naming the nearest real one (`stream.max_veiwers
 is not a setting; did you mean stream.max_viewers?`), a port is 0 to 65535, a boolean has no quotes, and

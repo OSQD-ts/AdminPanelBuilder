@@ -42,6 +42,9 @@ export interface ValueDefinition {
   pattern: RegExp | undefined;
   unit: string | undefined;
   format: ValueSchema["format"] | undefined;
+  dateFormat: import("../types.js").DateFormat | undefined;
+  image: import("../types.js").ImageOptions | undefined;
+  qr: import("../types.js").QrOptions | undefined;
   decimals: number | undefined;
   order: number;
   sequence: number;

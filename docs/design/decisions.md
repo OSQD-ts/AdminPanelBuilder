@@ -152,6 +152,42 @@ cards, arranging, the charts' geometry and how much a card shows at each width r
 CSS, which the kit has no equivalent for. A kit release can change the page's look; the screenshot
 baselines are where that is seen.
 
+## An action's result belongs to whoever ran it
+
+**The decision.** What an action answered, and the input it was given, are read by the operator who ran it
+(for an approved run, the proposer and the approver) unless the action says `"runners"` or `"everyone"`.
+Every operator who sees the action's group still sees that it ran, by whom, when, and whether it worked.
+The server leaves the rest out of `/api/changes` per operator; the change log, its hash chain, its audit
+sinks, `panel.changes()` and the `change` event keep the full record.
+
+**Why.** A result is often the one thing an operator ran the action to get — a reset link, a one-time
+code, a customer's details — and the Activity list is read by every administrator. Hiding the run itself
+would cost accountability: two administrators need to see that a reset was issued, and an audit trail
+with gaps is not one. So the fact is shared and the content is not. The filtering is on the server
+because a list sent whole and hidden on the page is a list sent whole. The audit trail keeps everything
+because it is read by whoever audits the deployment, not by the other operators on its page; and value
+changes stay shared, because a value's new setting is what every operator is looking at already.
+
+**The cost.** A behaviour change for existing panels: results everybody could read become the runner's.
+`actionVisibility: "everyone"` puts it back in one line. `"runners"` asks the action's group of each
+viewer, so a change in grants changes what an old record shows. A proposal still shows its input to the
+operators who may approve it, because they cannot decide without it.
+
+## A write's origin, behind a proxy
+
+**The decision.** A browser write's `Origin` is compared with `allowedOrigins` when the listener names
+some; otherwise with what a proxy in `trustedProxies` forwarded in `X-Forwarded-Host` and
+`X-Forwarded-Proto`; otherwise with `Host`. The forwarded headers are read only when the connection comes
+from one of those addresses, and only their rightmost entry, the one the nearest proxy wrote.
+
+**Why.** A proxy that rewrites `Host` made every write from the real page look cross-site, and the only
+way round it was to turn the check off. Believing `X-Forwarded-Host` from anybody would undo the check
+instead: it is a header any client can send. The address ranges reuse bothandlerjs's `ip.ts` byte for
+byte, so one parser decides what a proxy address is across the OSQD tools.
+
+**The cost.** One more option to know about behind a proxy; the refusal names it, so the first write that
+fails says what to set.
+
 ## No command line and no container
 
 **The decision.** Unlike its siblings, this package ships neither.

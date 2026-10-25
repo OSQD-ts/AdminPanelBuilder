@@ -9,7 +9,21 @@
  * durations in a language other than English go through `Intl`, so "vor 5 Minuten" needs no table
  * of ours. English keeps the page's own compact forms ("5 min ago"), which read better in a card.
  */
-import type { JsonValue, ValueFormat, ValueKind } from "../types.js";
+import type { DateFormat, JsonValue, ValueFormat, ValueKind } from "../types.js";
+
+/**
+ * How a moment is written: in which zone, in what shape, with whose conventions. The panel sets
+ * a default (`timeZone`, `dateFormat`, `dateLocale`), a value may override the shape, and a viewer
+ * may override the zone and the shape in their settings. Absent everywhere: the browser's zone and
+ * its conventions, in the page's language, as the page always did.
+ */
+export interface TimeSpec {
+  /** An IANA zone ("Europe/Warsaw", "UTC"). Absent: the viewer's browser. */
+  timeZone?: string | undefined;
+  dateFormat?: DateFormat | undefined;
+  /** A BCP 47 tag for how dates are written ("en-GB"), over the page's language. */
+  dateLocale?: string | undefined;
+}
 
 export interface FormatSpec {
   kind?: ValueKind | undefined;
@@ -21,6 +35,92 @@ export interface FormatSpec {
   /** How a switch reads: "On" and "Off" unless the page's language says otherwise. */
   on?: string | undefined;
   off?: string | undefined;
+  /** The panel's and the viewer's time settings. */
+  time?: TimeSpec | undefined;
+  /** This value's own shape for a timestamp, over the panel's. */
+  dateFormat?: DateFormat | undefined;
+  /** "Now", for a relative timestamp. Absent: the clock of the browser. */
+  now?: number | undefined;
+}
+
+const STYLES: Record<Exclude<DateFormat, object | "relative" | "iso">, Intl.DateTimeFormatOptions> = {
+  date: { dateStyle: "medium" },
+  time: { timeStyle: "short" },
+  datetime: { dateStyle: "medium", timeStyle: "short" },
+  "datetime-seconds": { dateStyle: "medium", timeStyle: "medium" },
+};
+
+/** One formatter per shape, zone and locale: building an Intl formatter costs far more than using one. */
+const formatters = new Map<string, Intl.DateTimeFormat>();
+function formatter(locale: string | undefined, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${locale ?? ""}|${JSON.stringify(options)}`;
+  let cached = formatters.get(key);
+  if (cached === undefined) {
+    cached = new Intl.DateTimeFormat(locale, options);
+    if (formatters.size > 200) formatters.clear();
+    formatters.set(key, cached);
+  }
+  return cached;
+}
+
+/**
+ * A moment as the page writes it. `shape` over the spec's, over "datetime-seconds". "iso" is ISO 8601 with
+ * the zone's offset ("2026-10-25T14:05:00+02:00"); "relative" is "5 min ago", and a date once the
+ * moment is a day old.
+ */
+export function formatTime(at: number, spec: { locale?: string | undefined; time?: TimeSpec | undefined; now?: number | undefined } = {}, shape?: DateFormat): string {
+  if (!Number.isFinite(at)) return String(at);
+  const time = spec.time ?? {};
+  const chosen = shape ?? time.dateFormat ?? "datetime-seconds";
+  const locale = time.dateLocale ?? spec.locale;
+  const timeZone = time.timeZone;
+  if (chosen === "iso") return isoInZone(at, timeZone);
+  if (chosen === "relative") return formatAgo(at, spec.now ?? Date.now(), spec.locale, time);
+  const options = typeof chosen === "string" ? STYLES[chosen] : chosen;
+  return formatter(locale, timeZone === undefined ? options : { ...options, timeZone }).format(at);
+}
+
+/**
+ * A moment that must be read as a moment — when a scheduled change runs, when a timed one reverts —
+ * in the page's shape unless that shape is relative, which says nothing useful about the future.
+ */
+export function formatMoment(at: number, spec: { locale?: string | undefined; time?: TimeSpec | undefined } = {}): string {
+  const shape = spec.time?.dateFormat;
+  return formatTime(at, spec, shape === undefined || shape === "relative" ? "datetime-seconds" : shape);
+}
+
+/** The time of day alone: chart axes and tips, the moment a timed change reverts. */
+export function formatClock(at: number, spec: { locale?: string | undefined; time?: TimeSpec | undefined } = {}, seconds = true): string {
+  const time = spec.time ?? {};
+  const options: Intl.DateTimeFormatOptions = { hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}) };
+  return formatter(time.dateLocale ?? spec.locale, time.timeZone === undefined ? options : { ...options, timeZone: time.timeZone }).format(at);
+}
+
+/** ISO 8601 in a zone, with that zone's offset at that moment: DST and half-hour zones included. */
+export function isoInZone(at: number, timeZone: string | undefined): string {
+  const date = new Date(at);
+  if (timeZone === undefined || timeZone === "UTC") {
+    if (timeZone === "UTC") return date.toISOString().replace(".000Z", "Z");
+    // The browser's own zone: its offset is the Date's.
+    const offset = -date.getTimezoneOffset();
+    return `${localParts(date)}${offsetText(offset)}`;
+  }
+  const parts = Object.fromEntries(formatter("en-US", { timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(date).map((part) => [part.type, part.value]));
+  const wall = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour) % 24, Number(parts.minute), Number(parts.second));
+  const offset = Math.round((wall - (at - date.getUTCMilliseconds())) / 60_000);
+  return `${parts.year}-${parts.month}-${parts.day}T${String(Number(parts.hour) % 24).padStart(2, "0")}:${parts.minute}:${parts.second}${offsetText(offset)}`;
+}
+
+function localParts(date: Date): string {
+  const two = (n: number): string => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}`;
+}
+
+function offsetText(minutes: number): string {
+  if (minutes === 0) return "Z";
+  const sign = minutes < 0 ? "-" : "+";
+  const abs = Math.abs(minutes);
+  return `${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
 }
 
 /** English, or unknown: the page's own forms. Anything else goes through Intl. */
@@ -49,7 +149,7 @@ export function formatNumber(value: number, spec: FormatSpec = {}): string {
       text = formatDuration(value, locale);
       break;
     case "timestamp":
-      text = new Date(value).toLocaleString(locale);
+      text = formatTime(value, spec, spec.dateFormat);
       break;
     default:
       text = fixed(value, Math.abs(value) >= 100 ? 0 : Math.abs(value) >= 1 ? 2 : 4);
@@ -123,11 +223,13 @@ function intlDuration(abs: number, locale: string): string {
 }
 
 /** "just now", "12 s ago", "5 min ago", "3 h ago", then the date; in another language, Intl's relative time. */
-export function formatAgo(at: number, now: number, locale?: string): string {
+export function formatAgo(at: number, now: number, locale?: string, time?: TimeSpec): string {
   const elapsed = Math.max(0, now - at);
   const intl = intlLocale(locale);
+  // A day old: the date, in the zone and conventions the page writes dates in.
+  const day = (): string => formatter(time?.dateLocale ?? (intl ?? locale), time?.timeZone === undefined ? { dateStyle: "medium" } : { dateStyle: "medium", timeZone: time.timeZone }).format(at);
   if (intl !== undefined) {
-    if (elapsed >= 86_400_000) return new Date(at).toLocaleDateString(intl);
+    if (elapsed >= 86_400_000) return day();
     const relative = new Intl.RelativeTimeFormat(intl, { numeric: "auto", style: "short" });
     if (elapsed < 2000) return relative.format(0, "second");
     if (elapsed < 60_000) return relative.format(-Math.floor(elapsed / 1000), "second");
@@ -138,7 +240,7 @@ export function formatAgo(at: number, now: number, locale?: string): string {
   if (elapsed < 60_000) return `${Math.floor(elapsed / 1000)} s ago`;
   if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} min ago`;
   if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} h ago`;
-  return new Date(at).toLocaleDateString(locale);
+  return day();
 }
 
 /** A value as the page shows it. `null` is a dash, which the page labels "no value" for screen readers. */
@@ -149,7 +251,7 @@ export function formatValue(value: JsonValue, spec: FormatSpec = {}): string {
   if (typeof value === "string") {
     if (spec.format === "timestamp") {
       const at = Date.parse(value);
-      if (!Number.isNaN(at)) return new Date(at).toLocaleString(spec.locale);
+      if (!Number.isNaN(at)) return formatTime(at, spec, spec.dateFormat);
     }
     return value;
   }

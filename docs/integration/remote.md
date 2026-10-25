@@ -36,6 +36,10 @@ app.use("/workers/mailer", remotePanelHandler({
   settings here, before anything reaches a browser, and refuses a write to anything outside those groups
   without forwarding it. What each operator may see is cached by the upstream's structure number, so a
   poll costs one upstream request.
+- **Its own page, its own rules.** The page is this handler's, so a write is judged by this handler's
+  `allowedOrigins`, `trustedProxies` and `csrf`, and the page sends this handler's `requestHeaders` — the
+  worker's are not passed on. `upstreamHeaders` adds fixed headers to every request to the worker, for a
+  gateway in front of it; it cannot replace the worker token or the operator's name.
 - **Live.** The worker's stream is forwarded frame by frame, filtered the same way, and resumes where it
   was after a reconnect. `stream: false` makes the page poll instead.
 - **One remote panel shows one process.** Nothing is aggregated across replicas, and the header names the

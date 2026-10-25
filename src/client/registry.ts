@@ -1,21 +1,25 @@
 /**
- * Where the chart and table code is found: in the same bundle, or in a second one loaded only by
- * panels that draw charts or tables.
+ * Where the chart, table and QR code drawing is found: in the same bundle, or in a second one loaded
+ * only by panels that draw them.
  *
- * The page's main bundle leaves out `charts.ts` and `table.ts`; `extras.ts` bundles them and
+ * The page's main bundle leaves out `charts.ts`, `table.ts` and `qr-view.ts` (with the QR encoder);
+ * `extras.ts` bundles them and
  * registers them here, on the global object, because the two bundles share nothing else. A
  * standalone page and a snapshot carry the extras inline when their schema needs them; a fragment
  * that polls a handler loads `client-extras.js` from it the first time a schema asks, with the
  * nonce the main script ran under so a nonce CSP admits it. The custom element imports the extras
  * directly and never loads anything.
  */
+import { usesExtras } from "../panel/extras.js";
 import type { PanelSchema } from "../types.js";
 import type { buildChart } from "./charts.js";
+import type { drawQr } from "./qr-view.js";
 import type { buildTable } from "./table.js";
 
 export interface Extras {
   buildChart?: typeof buildChart | undefined;
   buildTable?: typeof buildTable | undefined;
+  drawQr?: typeof drawQr | undefined;
 }
 
 const KEY = "__apbExtras";
@@ -31,10 +35,8 @@ export function registerExtras(found: Required<Extras>): void {
   (globalThis as Record<string, unknown>)[KEY] = found;
 }
 
-/** Whether a schema draws anything the extras hold. */
-export function needsExtras(schema: PanelSchema): boolean {
-  return schema.groups.some((group) => group.items.some((item) => item.type === "chart" || item.type === "table"));
-}
+/** Whether a schema draws anything the extras hold. The same rule the server uses (panel/extras.ts). */
+export const needsExtras = (schema: PanelSchema): boolean => usesExtras(schema);
 
 let loading: Promise<void> | undefined;
 
@@ -50,7 +52,7 @@ export function loadExtras(api: string): Promise<void> {
       "error",
       () => {
         loading = undefined;
-        reject(new Error("The panel's chart and table code could not be loaded."));
+        reject(new Error("The panel's chart, table and QR code drawing could not be loaded."));
       },
       { once: true },
     );

@@ -81,6 +81,9 @@ export function valueSchema(value: PanelValue<unknown>, writable: boolean): Valu
   if (d.description !== undefined) schema.description = d.description;
   if (d.unit !== undefined) schema.unit = d.unit;
   if (d.format !== undefined) schema.format = d.format;
+  if (d.dateFormat !== undefined) schema.dateFormat = d.dateFormat;
+  if (d.image !== undefined) schema.image = d.image;
+  if (d.qr !== undefined) schema.qr = d.qr;
   if (d.decimals !== undefined) schema.decimals = d.decimals;
   if (value.chartId !== undefined) schema.chart = value.chartId;
   if (d.span !== undefined) schema.span = d.span;

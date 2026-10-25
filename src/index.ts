@@ -41,6 +41,7 @@ export { AdminPanelConfigError, ValueError } from "./errors.js";
 // rather than discovered as a construction error in production.
 export { MAX_HISTORY_POINTS, MIN_SAMPLE_INTERVAL_MS } from "./values/history.js";
 export { DEFAULT_MAX_LENGTH, MAX_WIRE_BYTES } from "./values/kinds.js";
+export { MAX_ALT_LENGTH, MAX_IMAGE_HEIGHT, MAX_QR_BYTES, MAX_QR_VERSION, MIN_IMAGE_HEIGHT } from "./values/display.js";
 export { MIN_TOKEN_LENGTH } from "./server/auth.js";
 export { DEFAULT_PORT } from "./adapters/listen.js";
 

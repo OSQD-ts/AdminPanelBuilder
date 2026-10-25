@@ -6,9 +6,10 @@
  * its own, or on a Worker — and the rules below are tested once, here, without a server.
  *
  * The checks before routing run in a fixed order: the auth throttle, the `Host` header (the
- * DNS-rebinding defence), the same-origin check for writes, then authentication. The first
- * three ask whether this request was addressed to this panel by something allowed to address
- * it, which credentials cannot settle. Authentication runs before routing, so an
+ * DNS-rebinding defence), the same-origin check for writes (`allowedOrigins`, or the `Host` header,
+ * or what a `trustedProxies` proxy forwarded), the anti-forgery token for writes (`csrf`), then
+ * authentication. The first four ask whether this request was addressed to this panel by something
+ * allowed to address it, which credentials cannot settle. Authentication runs before routing, so an
  * unauthenticated caller gets the same refusal for every path and cannot map the API.
  *
  * Routes, under the base path:
@@ -55,13 +56,14 @@ import { type Clock, systemClock } from "../internal/clock.js";
 import { rejectUnknown } from "../internal/options.js";
 import { panelStylesheet, renderPage } from "../render/html.js";
 import { AuthThrottle, createAuthenticator, SharedThrottle, type Throttle, TOKEN_COOKIE } from "./auth.js";
+import { checkCsrf, checkOriginOf, resolveCsrf, resolveHeaderSources, resolveOriginPolicy } from "./requests.js";
 import { overTls } from "./session.js";
 import { BodyTooLargeError, type PanelRequest, type PanelResponse, type ServeOptions } from "./types.js";
 
 /** Largest request body read. An edit is one value; 64 KB is a long text field with room to spare. */
 export const MAX_BODY_BYTES = 64 * 1024;
 
-const SERVE_KEYS = ["basePath", "auth", "controls", "groups", "allowedHosts", "authThrottle", "clock", "stream", "metrics", "writeLimit", "health"];
+const SERVE_KEYS = ["basePath", "auth", "controls", "groups", "allowedHosts", "allowedOrigins", "trustedProxies", "csrf", "requestHeaders", "authThrottle", "clock", "stream", "metrics", "writeLimit", "health", "imageSources"];
 
 /** Writes one operator may make a minute by default: an operator clicking fast, not a script gone wrong. */
 export const DEFAULT_WRITES_PER_MINUTE = 60;
@@ -108,6 +110,7 @@ export interface RouterContext {
 
 export function createRouter(panel: AdminPanel, options: ServeOptions = {}, context: RouterContext): Router {
   rejectUnknown(options, SERVE_KEYS, context.where);
+  const imageSources = checkImageSources(options.imageSources, context.where);
   rejectUnknown(options.controls, ["edit", "actions"], `${context.where}: controls`);
   const where = context.where;
   const basePath = normalizeBase(options.basePath ?? "/", where);
@@ -126,6 +129,9 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
   }
   const groups = options.groups === undefined ? undefined : checkGroups(options.groups, where);
   const allowedHosts = resolveHosts(options.allowedHosts, context.boundHost, where);
+  const origins = resolveOriginPolicy(options.allowedOrigins, options.trustedProxies, where);
+  const csrf = resolveCsrf(options.csrf, where);
+  const headerSources = resolveHeaderSources(options.requestHeaders, csrf, where);
   const clock: Clock = options.clock ?? systemClock;
   const throttle = createThrottle(options.authThrottle, clock, where, (error) => panel.reportError(error, "the shared sign-in throttle"));
   const writes = createWriteLimit(options.writeLimit, clock, where);
@@ -180,7 +186,14 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
       return { status: 200, headers: { ...SECURITY_HEADERS, "content-type": "text/plain; charset=utf-8" }, body: warnings === 0 ? "ok" : `ok, ${warnings} warning${warnings === 1 ? "" : "s"}` };
     }
     const unsafe = method !== "GET" && method !== "HEAD";
-    if (unsafe && !sameOrigin(request)) return json(403, fail("refuseCrossSite"));
+    if (unsafe) {
+      const verdict = checkOriginOf(request, origins);
+      if (!verdict.ok) return json(403, fail("refuseCrossSite", { origin: verdict.origin, expected: verdict.expected }));
+      // Sign-in and sign-out under /auth/ carry their own state and are not the page's API: a provider's form posts there.
+      if (csrf !== undefined && !path.startsWith("/auth/") && !(await checkCsrf(csrf, { method, path, headers: request.headers, address: request.address }))) {
+        return json(403, fail("refuseCsrf", { header: csrf.header }));
+      }
+    }
 
     // Exchanging `?token=` for a cookie happens before authentication, because it is how a
     // browser that cannot send a header authenticates at all.
@@ -255,8 +268,10 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
           if (streams.full) return withHeaders(json(503, fail("refuseTooManyViewers", { max: streams.limit })), { "retry-after": "30" });
           return withHeaders(streams.openStream(mine, since, after, feed, panel.schema(mine()).pollMs), { ...SECURITY_HEADERS, "cache-control": "no-store, no-transform" });
         }
-        case "/api/changes":
-          return json(200, { changes: panel.changes().filter((change) => visibleChange(change.target, mine())) });
+        case "/api/changes": {
+          const current = mine();
+          return json(200, { changes: panel.changesFor(actor, current).filter((change) => visibleChange(change.target, current)) });
+        }
         case "/api/notices":
           return json(200, { notices: panel.notices() });
         case "/metrics":
@@ -365,7 +380,7 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
         return actionAnswer(await panel.run(first as string, actor, current, body.input, { reason }));
       case "row-action": {
         if (typeof body.row !== "string") return json(400, fail("refuseNeedsRow", { shape: '{ "row": "<id>" }' }));
-        return actionAnswer(await panel.runRowAction(first as string, second as string, body.row, actor, current));
+        return actionAnswer(await panel.runRowAction(first as string, second as string, body.row, actor, current, body.input));
       }
     }
   }
@@ -404,6 +419,7 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
   function schemaFor(current: PanelScope): PanelSchema {
     const schema = panel.schema(current);
     if (streams !== undefined) schema.stream = true;
+    if (headerSources.length > 0) schema.requestHeaders = headerSources.map((source) => ({ ...source }));
     return schema;
   }
 
@@ -425,8 +441,9 @@ export function createRouter(panel: AdminPanel, options: ServeOptions = {}, cont
     const nonce = createNonce();
     const body = renderPage({ bootstrap: { schema: schemaFor(current), state: panel.state(current) }, theme: panel.currentTheme(), themes: panel.offeredThemes(), nonce, api: basePath });
     // Built from `default-src 'none'`: everything the page may do is listed, and nothing else.
-    // `connect-src 'self'` for the polling; no fonts, images or frames from anywhere.
-    const csp = `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+    // `connect-src 'self'` for the polling; pictures from this origin, data: URIs and the origins
+    // the listener names in `imageSources`; no fonts or frames from anywhere.
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; img-src 'self' data:${imageSources.map((origin) => ` ${origin}`).join("")}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
     return { status: 200, headers: { ...SECURITY_HEADERS, "content-type": "text/html; charset=utf-8", "content-security-policy": csp }, body };
   }
 
@@ -604,23 +621,6 @@ function readTime(raw: unknown): number | undefined | null {
   return null;
 }
 
-/**
- * A browser names the page a write came from in `Origin` (and `Sec-Fetch-Site`). A client that
- * is not a browser sends neither, and is judged by its credentials alone.
- */
-function sameOrigin(request: PanelRequest): boolean {
-  const site = request.headers["sec-fetch-site"];
-  if (site !== undefined && site !== "same-origin" && site !== "none") return false;
-  const origin = request.headers.origin;
-  if (origin === undefined) return true;
-  if (origin === "null") return false;
-  try {
-    return new URL(origin).host.toLowerCase() === (request.headers.host ?? "").toLowerCase();
-  } catch {
-    return false;
-  }
-}
-
 function readCount(raw: string | null): number | undefined | null {
   if (raw === null || raw === "") return undefined;
   if (!/^\d{1,16}$/.test(raw)) return null;
@@ -631,4 +631,26 @@ function createNonce(): string {
   const bytes = new Uint8Array(18);
   globalThis.crypto.getRandomValues(bytes);
   return btoa(String.fromCharCode(...bytes));
+}
+
+/**
+ * The origins a listener lets the page load pictures from. Each goes into a CSP header, so each is
+ * an http(s) origin and nothing else: a path, a wildcard or a stray character would either widen
+ * the policy past what was meant or be ignored by the browser, and both look configured.
+ */
+function checkImageSources(sources: readonly string[] | undefined, where: string): string[] {
+  if (sources === undefined) return [];
+  if (!Array.isArray(sources)) throw new AdminPanelConfigError(`${where}: imageSources is a list of origins such as "https://cdn.example.com"`);
+  return sources.map((source) => {
+    let url: URL;
+    try {
+      url = new URL(String(source));
+    } catch {
+      throw new AdminPanelConfigError(`${where}: imageSources has "${String(source)}", which is not an origin such as "https://cdn.example.com"`);
+    }
+    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.hostname.includes("*") || url.origin !== String(source).replace(/\/$/, "")) {
+      throw new AdminPanelConfigError(`${where}: imageSources has "${String(source)}"; each entry is an http(s) origin with no path, query or wildcard, such as "https://cdn.example.com"`);
+    }
+    return url.origin;
+  });
 }

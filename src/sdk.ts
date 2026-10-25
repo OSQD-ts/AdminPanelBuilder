@@ -30,6 +30,8 @@ export interface PanelClientOptions {
   /** Default 10 seconds. */
   timeoutMs?: number | undefined;
   fetch?: typeof fetch | undefined;
+  /** Fixed headers sent with every call, for a gateway in front of the panel. The token and the operator are set from the options above. */
+  headers?: Readonly<Record<string, string>> | undefined;
 }
 
 /** A refusal or a failure, with the panel's own sentence. */
@@ -59,7 +61,8 @@ export interface PanelClient {
   cancelScheduled(id: string): Promise<WireValue>;
   /** Runs an action; one declared with approval answers `{ pending }` instead of a message. */
   run(action: string, input?: Record<string, unknown>, options?: { reason?: string | undefined }): Promise<string>;
-  runRowAction(table: string, action: string, row: string): Promise<string>;
+  /** Runs a row action for one row, with the input it asks for. */
+  runRowAction(table: string, action: string, row: string, input?: Record<string, unknown>): Promise<string>;
   applyProfile(id: string, options?: ChangeRequest): Promise<SetAnswer>;
   /** Approves a proposal; for an action, resolves to what it answered. */
   approve(pendingId: string): Promise<string | undefined>;
@@ -82,9 +85,16 @@ export function panelClient(options: PanelClientOptions): PanelClient {
   const base = options.url.replace(/\/+$/, "");
   const send = options.fetch ?? fetch;
   const timeoutMs = options.timeoutMs ?? 10_000;
+  const fixed: Record<string, string> = {};
+  for (const [name, value] of Object.entries(options.headers ?? {})) {
+    // Names a server would refuse to be told by a page, or that this client sets itself.
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$/.test(name) || /^(authorization|x-apb-on-behalf-of|content-type|content-length|host|cookie)$/i.test(name)) throw new TypeError(`panelClient(): headers cannot set "${name}"`);
+    if (typeof value !== "string" || /[\r\n]/.test(value)) throw new TypeError(`panelClient(): headers["${name}"] must be text without line breaks`);
+    fixed[name.toLowerCase()] = value;
+  }
 
   const request = async <T>(path: string, body?: unknown): Promise<T> => {
-    const headers: Record<string, string> = { accept: "application/json" };
+    const headers: Record<string, string> = { ...fixed, accept: "application/json" };
     if (options.token !== undefined && options.token !== "") headers.authorization = `Bearer ${options.token}`;
     if (options.onBehalfOf !== undefined) headers["x-apb-on-behalf-of"] = options.onBehalfOf;
     if (body !== undefined) headers["content-type"] = "application/json";
@@ -131,7 +141,7 @@ export function panelClient(options: PanelClientOptions): PanelClient {
       const answer = await request<{ result?: { message: string }; pending?: PendingChange }>(`/api/actions/${segment(action)}`, { ...(input === undefined ? {} : { input }), ...changeBody(extra) });
       return answer.result?.message ?? "Proposed; it runs once another operator approves it.";
     },
-    runRowAction: async (table, action, row) => (await request<{ result: { message: string } }>(`/api/tables/${segment(table)}/actions/${segment(action)}`, { row })).result.message,
+    runRowAction: async (table, action, row, input) => (await request<{ result: { message: string } }>(`/api/tables/${segment(table)}/actions/${segment(action)}`, input === undefined ? { row } : { row, input })).result.message,
     applyProfile: (id, extra = {}) => request<SetAnswer>(`/api/profiles/${segment(id)}`, changeBody(extra)),
     approve: async (id) => (await request<{ result?: { message: string } }>(`/api/pending/${segment(id)}/approve`, {})).result?.message,
     reject: async (id, extra = {}) => {

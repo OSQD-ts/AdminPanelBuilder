@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { CLIENT_SCRIPT } from "../src/client.generated.js";
+import { CLIENT_EXTRAS, CLIENT_SCRIPT } from "../src/client.generated.js";
 import { AdminPanelConfigError } from "../src/index.js";
-import { escapeHtml, scriptJson } from "../src/render/html.js";
+import { usesExtras as rule } from "../src/panel/extras.js";
+import { escapeHtml, scriptJson, usesExtras } from "../src/render/html.js";
 import { panelAt } from "./helpers.js";
 
 describe("the client bundle", () => {
@@ -70,5 +71,27 @@ describe("panel.html()", () => {
     expect(() => panel.html({ api: "javascript:alert(1)" })).toThrow(AdminPanelConfigError);
     expect(() => panel.html({ api: "/a", groups: ["x"] })).toThrow(/belong on the handler/);
     expect(() => panel.html({ snapshot: true, nonse: "x" } as never)).toThrow(/did you mean "nonce"/);
+  });
+});
+
+describe("the extras bundle carries the QR drawing", () => {
+  it("keeps the QR encoder out of the main bundle, which every panel loads", () => {
+    // esbuild names each source file in a comment in its bundle, so the module's name says where it went.
+    expect(CLIENT_EXTRAS).toContain("qr-view");
+    expect(CLIENT_SCRIPT).not.toContain("qr-view");
+    expect(CLIENT_SCRIPT.length).toBeLessThan(CLIENT_EXTRAS.length * 4);
+  });
+
+  it("is sent with a panel that shows a value as a QR code, and not with one that shows only a picture", () => {
+    const { panel: withQr } = panelAt();
+    withQr.viewable("otpauth://totp/x", { id: "code", format: "qr" });
+    expect(usesExtras(withQr.schema())).toBe(true);
+    // The page asks the same function (client/registry.ts re-exports it as needsExtras).
+    expect(usesExtras).toBe(rule);
+    expect(withQr.html({ snapshot: true })).toContain(CLIENT_EXTRAS);
+
+    const { panel: withImage } = panelAt();
+    withImage.viewable("/logo.png", { id: "logo", format: "image", image: { alt: "Logo" } });
+    expect(usesExtras(withImage.schema())).toBe(false);
   });
 });

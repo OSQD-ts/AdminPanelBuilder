@@ -8,7 +8,7 @@
  * serve a panel without a generate step. `--check` exits 1 when the committed copy no longer
  * matches its source, which is what CI runs first.
  *
- * Two bundles: the client, and its extras (charts and tables), which a panel that draws neither never
+ * Two bundles: the client, and its extras (charts, tables and QR codes), which a panel that draws none never
  * loads. See src/client/registry.ts. The main bundle must not contain the chart code; the build
  * checks that too, since one stray import would quietly undo the split.
  *
@@ -71,7 +71,7 @@ async function refuseSinks(code, metafile) {
 export async function buildClient() {
   const main = await bundle(entry);
   const extras = await bundle(extrasEntry);
-  const leaked = main.inputs.filter((input) => /src\/client\/(charts|table)\.ts$/.test(input));
+  const leaked = main.inputs.filter((input) => /src\/client\/(charts|table|qr|qr-view)\.ts$/.test(input));
   if (leaked.length > 0) throw new Error(`The main client bundle includes ${leaked.join(", ")}, which belong in the extras bundle only; import them through src/client/registry.ts.`);
   // Other languages travel with the schema; a word from one of their tables here means the client imported LOCALES.
   for (const word of ["Aktivität", "Aktywność"]) if (main.code.includes(word) || extras.code.includes(word)) throw new Error(`The client bundle contains "${word}": it carries every language's words. Import ENGLISH, not LOCALES, in src/client/.`);
