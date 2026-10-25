@@ -12,6 +12,7 @@ import { CLIENT_EXTRAS, CLIENT_SCRIPT } from "../client.generated.js";
 import { scopedThemeStylesheet, themeStylesheet } from "../themes/define.js";
 import type { Theme } from "../themes/types.js";
 import type { PanelSchema, PanelState } from "../types.js";
+import { KIT_CSS } from "./kit-css.generated.js";
 import { LAYOUT_CSS } from "./layout.js";
 
 export interface Bootstrap {
@@ -25,12 +26,12 @@ export function usesExtras(schema: PanelSchema): boolean {
 }
 
 /**
- * Theme preamble, the other themes a viewer may choose (scoped to `data-theme`), layout, then the
- * theme's own additions, so they win ties.
+ * Theme preamble, the other themes a viewer may choose (scoped to `data-theme`), the component
+ * kit's rules the page uses, layout, then the theme's own additions, so they win ties.
  */
 export function panelStylesheet(theme: Theme, offered: readonly Theme[] = []): string {
   const others = offered.filter((other) => other.name !== theme.name).map(scopedThemeStylesheet).join("");
-  return `${themeStylesheet(theme)}${others}${LAYOUT_CSS}\n${theme.css}`;
+  return `${themeStylesheet(theme)}${others}${KIT_CSS}${LAYOUT_CSS}\n${theme.css}`;
 }
 
 export function escapeHtml(text: string): string {
@@ -53,7 +54,7 @@ function rootElement(bootstrap: Bootstrap | undefined, theme: Theme, scheme: "au
   const groupAttribute = only.group === undefined ? "" : ` data-group="${escapeHtml(only.group)}"`;
   const compactAttribute = only.compact === true ? " data-compact" : "";
   return [
-    `<div class="apb-root${standalone ? " apb-standalone" : ""}" data-apb-root data-theme-name="${escapeHtml(theme.name)}"${schemeAttribute}${apiAttribute}${groupAttribute}${compactAttribute}>`,
+    `<div class="apb-root oq${standalone ? " apb-standalone" : ""}" data-apb-root data-theme-name="${escapeHtml(theme.name)}"${schemeAttribute}${apiAttribute}${groupAttribute}${compactAttribute}>`,
     bootstrap === undefined ? "" : `<script type="application/json" data-apb-bootstrap>${scriptJson(bootstrap)}</script>`,
     `<noscript><p class="apb-note">This panel needs JavaScript to show its values.</p></noscript>`,
     "</div>",

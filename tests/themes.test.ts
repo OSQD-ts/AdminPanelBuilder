@@ -5,9 +5,11 @@
  * cannot leave half the page unstyled while every screenshot still looks right.
  */
 import { describe, expect, it } from "vitest";
-import { AdminPanelConfigError, appleTheme, BUILT_IN_THEMES, defineTheme, highContrastTheme, materialTheme, type Theme, type ThemeColors, themePlaygroundHtml } from "../src/index.js";
+import { AdminPanelConfigError, appleTheme, BUILT_IN_THEMES, defineTheme, highContrastTheme, materialTheme, OSQD_UI_THEMES, type Theme, type ThemeColors, themePlaygroundHtml } from "../src/index.js";
 import { LAYOUT_CSS } from "../src/render/layout.js";
 import { themeStylesheet } from "../src/themes/define.js";
+import { kitIntents, textOn } from "../src/themes/kit-bridge.js";
+import { KIT_CSS } from "../src/render/kit-css.generated.js";
 
 function luminance(hex: string): number {
   const value = Number.parseInt(hex.replace("#", ""), 16);
@@ -39,7 +41,8 @@ const PAIRS: Array<[keyof ThemeColors, keyof ThemeColors, number]> = [
   ["warn", "surface", 3],
 ];
 
-describe.each(Object.values(BUILT_IN_THEMES).map((theme) => [theme.name, theme] as [string, Theme]))("the %s theme", (_name, theme) => {
+// The @osqd/ui themes are opt-in rather than built in, and are held to the same ratios.
+describe.each([...Object.values(BUILT_IN_THEMES), ...OSQD_UI_THEMES].map((theme) => [theme.name, theme] as [string, Theme]))("the %s theme", (_name, theme) => {
   for (const scheme of ["light", "dark"] as const) {
     it(`reads clearly in ${scheme}`, () => {
       const colors = theme[scheme];
@@ -109,6 +112,39 @@ describe("the layout and the tokens", () => {
     const css = themeStylesheet(materialTheme);
     expect(css).toContain('.apb-root:not([data-scheme="light"])');
     expect(css).toContain('.apb-root[data-scheme="dark"]');
+  });
+});
+
+describe("the bridge to the component kit", () => {
+  // The page is drawn with the kit's components, which read --oq-* (src/themes/kit-bridge.ts). Each
+  // intent is a fill carrying text, a pair no theme states, so the bridge chooses the text colour
+  // and this holds every one of them to 4.5:1, in every theme and both schemes.
+  describe.each([...Object.values(BUILT_IN_THEMES), ...OSQD_UI_THEMES].map((theme) => [theme.name, theme] as [string, Theme]))("the %s theme", (_name, theme) => {
+    it.each(["light", "dark"] as const)("gives every intent a readable text colour in %s", (scheme) => {
+      const colors = theme[scheme];
+      const failures = Object.entries(kitIntents(colors))
+        .map(([name, fill]) => [name, fill, name === "primary" ? colors.onAccent : textOn(fill, colors.onAccent)] as const)
+        .filter(([, fill, on]) => contrast(on, fill) < 4.5)
+        .map(([name, fill, on]) => `${name}: ${on} on ${fill} is ${contrast(on, fill).toFixed(2)}`);
+      expect(failures).toEqual([]);
+    });
+  });
+
+  it("defines every --oq-* property the kit's rules read, so none of them falls back to nothing", () => {
+    const defined = new Set([...themeStylesheet(materialTheme).matchAll(/(--oq-[a-z0-9-]+):/g)].map((match) => match[1]));
+    // The kit's rules set these themselves, on .oq and on each intent or component.
+    for (const name of [...KIT_CSS.matchAll(/(--oq-[a-z0-9-]+):/g)].map((match) => match[1])) defined.add(name);
+    const read = new Set([...KIT_CSS.matchAll(/var\((--oq-[a-z0-9-]+)/g)].map((match) => match[1]));
+    expect([...read].filter((name) => !defined.has(name))).toEqual([]);
+  });
+
+  it("carries none of the kit's own theme rules: the panel's theme is the only source of colour", () => {
+    // A theme rule is one whose every selector is a scope (:root, :host, [data-theme…]) on its own.
+    const themeRule = /(^|\n)(?::root|:host(?:\([^)]*\))?|\[data-theme[^\]]*\])(?:,\s*(?::root|:host(?:\([^)]*\))?|\[data-theme[^\]]*\]))*\s*\{/;
+    expect(KIT_CSS).not.toMatch(themeRule);
+    // The only literal colour is the opaque black of an alpha mask (a fading edge), which is not seen.
+    const literals = KIT_CSS.replace(/mask-image:[^;]*;/g, "").replace(/"[^"]*"/g, "");
+    expect(literals).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(/i);
   });
 });
 

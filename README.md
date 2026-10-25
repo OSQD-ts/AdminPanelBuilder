@@ -83,11 +83,12 @@ framing, every value placed with `textContent`, a client bundle whose build refu
 *and* a table under every chart, and an axe pass in the browser suite. Values are text somebody else
 wrote (a player's name, an email subject), and the page treats them that way.
 
-**Themes are data.** One layout stylesheet written against custom properties, and six themes that fill
-them in: Material (the default), Apple, Fluent, Carbon, the OSQD dashboards' own, and a high-contrast
-theme held to 7:1. A custom theme is `defineTheme()`
+**Themes are data.** The page is drawn with the @osqd/ui components and one layout stylesheet, all
+written against custom properties, and six themes fill them in: Material (the default), Apple,
+Fluent, Carbon, the OSQD dashboards' own, and a high-contrast theme held to 7:1. A custom theme is `defineTheme()`
 over any of them and reaches every screen the built-in ones do; every text colour is measured at 4.5:1
-by the test suite.
+by the test suite. Five more, matching the @osqd/ui kit, are opt-in through `OSQD_UI_THEMES`
+([themes](docs/operations/themes.md#the-osqdui-themes)).
 
 The trade-offs, and what each costs, are in [the design decisions](docs/design/decisions.md).
 

@@ -286,3 +286,16 @@ All notable changes to this project are documented here. The format follows
   than leave a hole between cards.
 - **Observability.** `otelMetrics` for OpenTelemetry, `syslogSink` and `otelLogSink` for logs (with
   alerts), and an opt-in `/healthz` for load balancers.
+- **Drawn with the @osqd/ui components.** Buttons, fields, selects, checkboxes, the range, tabs and
+  their counts, badges, notes, tables, dialogs, the command palette and the chart legend and tooltip are
+  the kit's components, filled in by the panel's own themes: each scheme's tokens also set the kit's
+  `--oq-*` names, derived from the theme's colours and shape, with the text on every intent chosen for
+  4.5:1. The look of the page changes; the theme API, its keys, the `--apb-*` names and the panel's
+  class names do not. Only the kit rules the page uses are served, copied in at build time
+  (`npm run kit:build`, checked by `npm run check`); the kit is a devDependency, not a runtime one.
+- **The @osqd/ui themes, opt-in.** `OSQD_UI_THEMES` brings five themes that match pages built with the
+  @osqd/ui kit — `osqd-ui`, `osqd-ui-graphite`, `osqd-ui-midnight`, `osqd-ui-paper` and
+  `osqd-ui-contrast` — each pairing two of the kit's single-scheme palettes into a light and a dark, with
+  the kit's series palette as chart slots. They are not built in, so the default list and its screenshots
+  are unchanged; they pass the same contrast checks, and a test compares the copied palettes with the kit
+  when it sits beside this folder.

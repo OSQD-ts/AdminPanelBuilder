@@ -28,7 +28,7 @@ jobs:
       # First, deliberately: pretest, pretypecheck and prebuild regenerate the client bundle, so
       # any later step would quietly repair a stale commit instead of failing on it.
       - name: The committed client bundle is current
-        run: npm run client:check
+        run: npm run client:check && npm run kit:check
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test

@@ -134,6 +134,24 @@ dashboards' `:root, :host`.
 **The cost.** A host page cannot restyle the panel by setting `--apb-*` on `:root`; it must target
 `.apb-root`.
 
+## Drawn with the @osqd/ui components, themed by the panel
+
+**The decision.** The page's controls are the @osqd/ui kit's components (`oq-btn`, `oq-input`, `oq-tabs`,
+`oq-dialog` …), and the panel's themes fill them in: every scheme's tokens also set the kit's `--oq-*`
+names, derived from the theme's own (src/themes/kit-bridge.ts). The kit is a devDependency; the rules
+the page uses are copied in at build time and committed, like the client bundle.
+
+**Why.** One look across the OSQD tools without giving up what a theme here is: a light and a dark scheme
+in one object, `defineTheme` refusing a misspelt token, tokens scoped to `.apb-root`. Taking the kit's
+themes instead would have changed the theme API and every custom theme with it, and put tokens on
+`:root`, which an embedded panel must not touch. The panel's class names stay beside the kit's, so a
+theme's `css` and the tests keep their hooks.
+
+**The cost.** The page's stylesheet grows by the kit's rules (about 21 kB of the 101 kB), and the grid of
+cards, arranging, the charts' geometry and how much a card shows at each width remain the panel's own
+CSS, which the kit has no equivalent for. A kit release can change the page's look; the screenshot
+baselines are where that is seen.
+
 ## No command line and no container
 
 **The decision.** Unlike its siblings, this package ships neither.

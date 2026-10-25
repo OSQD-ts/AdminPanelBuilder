@@ -9,6 +9,7 @@
  * theme is as complete as a built-in one.
  */
 import { AdminPanelConfigError } from "../errors.js";
+import { kitColorDeclarations, kitShapeDeclarations } from "./kit-bridge.js";
 import { materialTheme } from "./material.js";
 import type { Theme, ThemeColors, ThemeDefinition, ThemeShape } from "./types.js";
 
@@ -119,11 +120,13 @@ export function colorDeclarations(colors: ThemeColors): string {
     lines.push(`--apb-chart-${index + 1}: ${colour};`);
   });
   lines.push(`color-scheme: ${isDark(colors) ? "dark" : "light"};`);
+  // The same colours in the component kit's names (src/themes/kit-bridge.ts).
+  lines.push(kitColorDeclarations(colors, isDark(colors)));
   return lines.join(" ");
 }
 
 export function shapeDeclarations(shape: ThemeShape): string {
-  return SHAPE_KEYS.map((key) => `${tokenName(key)}: ${shape[key]};`).join(" ");
+  return `${SHAPE_KEYS.map((key) => `${tokenName(key)}: ${shape[key]};`).join(" ")} ${kitShapeDeclarations(shape)}`;
 }
 
 /** Whether a scheme is dark, from its surface's luminance, so `color-scheme` tells the browser the truth about form controls. */

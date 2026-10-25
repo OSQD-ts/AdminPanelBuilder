@@ -11,11 +11,13 @@
  * was mounted on, passed in.
  */
 
+import { withKit } from "./kit.js";
+
 export type Root = HTMLElement | ShadowRoot;
 
 export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string | null, text?: string | number | null): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
-  if (className !== undefined && className !== null && className !== "") node.className = className;
+  if (className !== undefined && className !== null && className !== "") node.className = withKit(className);
   if (text !== undefined && text !== null) node.textContent = String(text);
   return node;
 }

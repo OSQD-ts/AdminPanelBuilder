@@ -64,6 +64,31 @@ applies at once and nothing is fetched — the CSP would refuse a second stylesh
 applies only where it is the panel's own theme. The same dialog holds the viewer's colours, language,
 compact cards, whether values flash when they change, animations and trend chips.
 
+## The @osqd/ui themes
+
+Five more themes match pages built with the @osqd/ui kit, so a panel served beside them reads as the same
+product. They are opt-in: pass them in `themes` to offer them, or one as `theme`.
+
+```ts
+import { OSQD_UI_THEMES, osqdUiTheme } from "@osqd/admin-panel-builder";
+
+createAdminPanel({ theme: osqdUiTheme, themes: OSQD_UI_THEMES });   // all five in Settings, osqd-ui first
+```
+
+| Theme | Light | Dark |
+| --- | --- | --- |
+| `osqd-ui` | warm white on soft grey | warm greys |
+| `osqd-ui-graphite` | cool light greys, blue lead | cool neutral greys, blue lead |
+| `osqd-ui-midnight` | cool light greys, blue lead | deep navy |
+| `osqd-ui-paper` | warm off-white | warm greys |
+| `osqd-ui-contrast` | warm white on soft grey | black and white, yellow focus ring |
+
+Each kit palette is one scheme, so the five pair them by temperature. The chart slots are the kit's series
+palette, and the panel's spacing unit stays 6px, the density of `osqd`. The palettes are copies (the
+panel has no runtime dependencies); `OSQD_UI_PALETTES` exports them as the kit names them, and
+`tests/osqd-ui-themes.test.ts` compares them with the kit whenever its folder sits beside this one.
+Because they are not built in, a theme name in a configuration file cannot reach them: pass the objects.
+
 ## Tokens
 
 Colours, set for `light` and for `dark`: `background`, `surface`, `surfaceRaised`, `border`, `ink`,
@@ -80,6 +105,35 @@ host page's `:root`, so an embedded panel styles itself and nothing around it.
 `muted`, `link` and `bad` at 4.5:1 on their surfaces, `onAccent` at 4.5:1 on `accentStrong`, `accent`
 and `warn` at 3:1, and the high-contrast theme at 7:1 throughout. `contrastRatio(a, b)` is the function
 it uses; hold a theme of your own to the same numbers.
+
+## Drawn with the @osqd/ui components
+
+The page's controls are the @osqd/ui kit's components: a button is an `oq-btn`, a field an `oq-input`,
+the tabs an `oq-tabs`, a dialog an `oq-dialog`. Every theme above draws them, because each scheme's
+tokens also carry the kit's names, derived from the theme's own:
+
+| Kit property | From |
+| --- | --- |
+| `--oq-bg`, `--oq-surface`, `--oq-raised`, `--oq-border` | `background`, `surface`, `surfaceRaised`, `border` |
+| `--oq-text`, `--oq-text-muted`, `--oq-text-faint` | `ink`, `inkSecondary`, `muted` |
+| `--oq-primary` / `--oq-on-primary` | `accentStrong` / `onAccent` |
+| `--oq-secondary`, `--oq-info` | `link` |
+| `--oq-success`, `--oq-warning`, `--oq-danger`, `--oq-neutral` | `ok`, `warn`, `bad`, `muted` |
+| `--oq-on-<intent>` | black or white, whichever reads better on that fill (4.5:1 at least, tested) |
+| `--oq-hover`, `--oq-border-strong`, `--oq-selection`, `--oq-overlay` | mixed from the colours above |
+| `--oq-focus`, `--oq-shadow-sm` / `-md` / `-lg` | `focus`, `shadow`, `shadowRaised` |
+| `--oq-series-1` … `-8`, `--oq-seq-0` … `-12`, `--oq-ord-1` … `-5` | `chart`, and ramps from `surface` to `accentStrong` |
+| `--oq-font-sans`, `--oq-font-mono`, `--oq-text-xs` … `-3xl` | `font`, `monoFont`, steps from `fontSize` |
+| `--oq-radius-sm` / `-md` / `-lg`, `--oq-space`, `--oq-control-*` | `radiusSmall`, `radius`, half of `spacing`, multiples of `spacing` |
+
+A theme therefore stays a theme of this panel — `defineTheme`, its keys and the `--apb-*` names are
+unchanged — and reaches the components without knowing they exist. `buttonCase` and `strongWeight`
+still letter the buttons and tabs.
+
+A theme's `css` can target either name: the panel's classes (`.apb-button`) stay on every element beside
+the kit's (`.oq-btn`), and the kit's rules come before the layout's and the theme's, so both win ties
+against the kit. Only the kit rules the page uses are served (`src/render/kit-css.generated.ts`, built
+from the installed kit by `npm run kit:build`, checked by `npm run check`).
 
 ## Words
 

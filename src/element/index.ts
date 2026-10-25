@@ -74,7 +74,7 @@ export function defineAdminPanelElement(name: string = ELEMENT_NAME): CustomElem
       link.rel = "stylesheet";
       link.href = `${base}/panel.css`;
       const container = document.createElement("div");
-      container.className = "apb-root";
+      container.className = "apb-root oq";
       shadow.append(link, container);
       this.container = container;
       this.applyScheme();
