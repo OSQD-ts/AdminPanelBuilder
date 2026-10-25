@@ -45,7 +45,7 @@ export { MIN_TOKEN_LENGTH } from "./server/auth.js";
 export { DEFAULT_PORT } from "./adapters/listen.js";
 
 // Themes.
-export { appleTheme, BUILT_IN_THEMES, carbonTheme, contrastRatio, defineTheme, fluentTheme, highContrastTheme, materialTheme, osqdTheme } from "./themes/index.js";
+export { appleTheme, BUILT_IN_THEMES, carbonTheme, contrastRatio, defineTheme, fluentTheme, highContrastTheme, materialTheme, OSQD_UI_THEMES, osqdTheme, osqdUiContrastTheme, osqdUiGraphiteTheme, osqdUiMidnightTheme, osqdUiPaperTheme, osqdUiTheme } from "./themes/index.js";
 export type { Theme, ThemeColors, ThemeDefinition, ThemeShape } from "./themes/index.js";
 
 // Stores for `persist: true`.

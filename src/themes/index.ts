@@ -17,6 +17,8 @@ export { fluentTheme } from "./fluent.js";
 export { highContrastTheme } from "./high-contrast.js";
 export { materialTheme } from "./material.js";
 export { osqdTheme } from "./osqd.js";
+export { OSQD_UI_PALETTES, OSQD_UI_THEMES, osqdUiContrastTheme, osqdUiGraphiteTheme, osqdUiMidnightTheme, osqdUiPaperTheme, osqdUiTheme } from "./osqd-ui.js";
+export type { OsqdUiPalette } from "./osqd-ui.js";
 export { defineTheme, themeStylesheet, tokenName } from "./define.js";
 export type { Theme, ThemeColors, ThemeDefinition, ThemeShape } from "./types.js";
 

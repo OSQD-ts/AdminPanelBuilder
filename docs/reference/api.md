@@ -74,6 +74,7 @@ grants)` is a scope narrowed to one operator's grants, never widened.
 | Export | |
 | --- | --- |
 | `materialTheme`, `appleTheme`, `osqdTheme`, `fluentTheme`, `carbonTheme`, `highContrastTheme`, `BUILT_IN_THEMES` | The themes that ship. |
+| `osqdUiTheme`, `osqdUiGraphiteTheme`, `osqdUiMidnightTheme`, `osqdUiPaperTheme`, `osqdUiContrastTheme`, `OSQD_UI_THEMES` | The opt-in themes matching the @osqd/ui kit ([themes](../operations/themes.md#the-osqdui-themes)); `OSQD_UI_PALETTES` (on `./themes`) is the kit's palettes they are built from. |
 | `defineTheme(definition)`, `contrastRatio(a, b)`, `themePlaygroundHtml(themes?, nonce?)` | A theme of your own, measured. See [themes](../operations/themes.md). |
 | `memoryStore(initial?)`, `fileStore(path)`, `redisStore(redis, options?)` | Stores for `persist`. See [persistence](../operations/persistence.md). |
 | `memoryChangeLog()`, `fileChangeLog(path, { rotate?, keep? })`, `redisChangeLog(redis, options?)` | Where every change is kept; the file log rotates by size or day. See [audit](../operations/audit.md). |
