@@ -1,4 +1,28 @@
+import { readdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { defineConfig } from "tsup";
+
+// The generated modules (the page's client bundle and the vendored kit stylesheet) are each one
+// string literal of a few hundred kilobytes, and every map that bundles them carried a copy: there
+// is nothing in a string to step through, and their real sources are src/client/ and @osqd/ui.
+// Leaving their text out of the maps (the mappings stay) is what keeps the tarball under the 2 MB
+// CI holds it to. The same step bothandlerjs runs; other sources keep their content.
+async function generatedSourcesOutOfMaps(): Promise<void> {
+  for (const file of await readdir("dist", { recursive: true })) {
+    if (!file.endsWith(".map")) continue;
+    const path = join("dist", file);
+    const map = JSON.parse(await readFile(path, "utf8")) as { sources?: string[]; sourcesContent?: Array<string | null> };
+    if (map.sources === undefined || map.sourcesContent === undefined) continue;
+    let changed = false;
+    map.sources.forEach((source, index) => {
+      if (source.endsWith(".generated.ts") && map.sourcesContent?.[index] !== null) {
+        (map.sourcesContent as Array<string | null>)[index] = null;
+        changed = true;
+      }
+    });
+    if (changed) await writeFile(path, JSON.stringify(map));
+  }
+}
 
 const shared = {
   format: ["esm", "cjs"] as const,
@@ -6,6 +30,7 @@ const shared = {
   sourcemap: true,
   target: "es2022",
   splitting: false,
+  onSuccess: generatedSourcesOutOfMaps,
 };
 
 // One entry per import path:
@@ -39,5 +64,5 @@ export default defineConfig([
   { entry: entries, clean: false, ...shared, format: ["cjs"], sourcemap: false },
   // Browser code, so ESM only and type-checked against the DOM. Kept off the root entry, which
   // must never pull in anything that needs a document.
-  { entry: { element: "src/element/index.ts", react: "src/react.ts", vue: "src/vue.ts" }, format: ["esm"], platform: "browser", target: "es2020", dts: false, sourcemap: true, splitting: false, clean: false },
+  { entry: { element: "src/element/index.ts", react: "src/react.ts", vue: "src/vue.ts" }, format: ["esm"], platform: "browser", target: "es2020", dts: false, sourcemap: true, splitting: false, clean: false, onSuccess: generatedSourcesOutOfMaps },
 ]);
