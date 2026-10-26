@@ -22,12 +22,12 @@ Every exported function, class and constant.
 | `counter(label, options?)` | A count with its rate: `.inc()`, `.reset()`, `.total`, `.rate`. |
 | `rate(label, read, options?)` | The rate of a total the application keeps. |
 | `percentiles(label, options?)` | `.record(observation)`; p50, p95, p99 charted together. |
-| `group(name, options?)` | A group, created on first mention: `.add(...)`, `.configure()`, and every declaration above. |
+| `group(name, options?)` | A group, created on first mention: `.add(...)`, `.configure()`, every declaration above, and `.section()`, `.card()`, `.divider()`, `.spacer()`, `.break()`. |
 | `chart({ title, series, … })` | A chart shared by a group. Returns its id. |
 | `configure(options)` | Settings for the default panel; the store, clock, change log, locale and error channel only before the first declaration. |
 | `defaultPanel()` | The default panel, created on first use. |
 
-Options for each: [values](../concepts/values.md), [charts](../concepts/charts.md), [groups](../concepts/groups.md), [actions](../concepts/actions.md), [tables, feeds and profiles](../concepts/blocks.md), [counters](../concepts/counters.md).
+Options for each: [values](../concepts/values.md), [charts](../concepts/charts.md), [groups](../concepts/groups.md), [layout](../concepts/layout.md), [actions](../concepts/actions.md), [tables, feeds and profiles](../concepts/blocks.md), [counters](../concepts/counters.md).
 
 ### The panel
 
@@ -41,7 +41,9 @@ or `"everyone"` — see [actions](../concepts/actions.md#who-reads-the-result)).
 | Member | Does |
 | --- | --- |
 | every declaration above | On this panel. |
-| `move(item, group)` | Moves a value or an action. |
+| `move(item, group)` | Moves a value or an action; it leaves its section and list card behind. |
+| `section(name, options?)`, `card(name, options?)` | A section of a group, or a list card holding several values as rows; `options.group` says which group. See [layout](../concepts/layout.md). |
+| `divider(options?)`, `spacer(options?)`, `break(options?)` | A line, a gap or a row break between the cards declared before and after it. |
 | `configure({ title, instance, theme, colorScheme, pollIntervalMs })` | Applies on the next update; refused whole if any part is invalid. |
 | `handler(options?)`, `listen(options?)`, `fetchHandler(options?)` | Serving it. See [serving](../integration/index.md). |
 | `html({ api } \| { snapshot, nonce?, groups?, document? }, and script?, group?, compact?)` | The panel as HTML. See [embedding](../integration/embedding.md). |
@@ -94,7 +96,7 @@ grants)` is a scope narrowed to one operator's grants, never widened.
 | `AdminPanelConfigError`, `ValueError` | The two refusals. |
 | `PanelGroup`, `PanelAction`, `PanelTable`, `PanelFeed` | What the declarations return. |
 | `VERSION` | The package version. |
-| `MAX_HISTORY_POINTS`, `MIN_SAMPLE_INTERVAL_MS`, `MIN_POLL_INTERVAL_MS`, `MAX_SERIES`, `MAX_CHANGES`, `MAX_NOTICES`, `MAX_WIRE_BYTES`, `DEFAULT_MAX_LENGTH`, `MIN_TOKEN_LENGTH`, `DEFAULT_ACTION_TIMEOUT_MS`, `DEFAULT_PORT`, `MAX_PAGE_SIZE`, `MAX_SEARCH_LENGTH`, `MAX_DISABLED_REASON`, `MAX_FEED_CAPACITY`, `MAX_ENTRY_TEXT`, `MAX_REVERT_MS`, `APPROVAL_TTL_MS`, `MAX_PENDING`, `MIN_SESSION_SECRET_LENGTH`, `MAX_SCHEDULED`, `MAX_SCHEDULE_AHEAD_MS`, `MAX_SYNC_MESSAGE_BYTES`, `MAX_WEBHOOK_RETRIES`, `MAX_REVOKED_SESSIONS`, `DEFAULT_WRITES_PER_MINUTE`, `MAX_REASON_LENGTH`, `MIN_ROTATE_BYTES`, `MAX_GRID_COLUMNS`, `MAX_CARD_ROWS`, `MAX_LAYOUT_BYTES`, `MAX_LAYOUT_ENTRIES`, `MIN_IMAGE_HEIGHT`, `MAX_IMAGE_HEIGHT`, `MAX_ALT_LENGTH`, `MAX_QR_VERSION`, `MAX_QR_BYTES` | See [limits](limits.md). |
+| `MAX_HISTORY_POINTS`, `MIN_SAMPLE_INTERVAL_MS`, `MIN_POLL_INTERVAL_MS`, `MAX_SERIES`, `MAX_CHANGES`, `MAX_NOTICES`, `MAX_WIRE_BYTES`, `DEFAULT_MAX_LENGTH`, `MIN_TOKEN_LENGTH`, `DEFAULT_ACTION_TIMEOUT_MS`, `DEFAULT_PORT`, `MAX_PAGE_SIZE`, `MAX_SEARCH_LENGTH`, `MAX_DISABLED_REASON`, `MAX_FEED_CAPACITY`, `MAX_ENTRY_TEXT`, `MAX_REVERT_MS`, `APPROVAL_TTL_MS`, `MAX_PENDING`, `MIN_SESSION_SECRET_LENGTH`, `MAX_SCHEDULED`, `MAX_SCHEDULE_AHEAD_MS`, `MAX_SYNC_MESSAGE_BYTES`, `MAX_WEBHOOK_RETRIES`, `MAX_REVOKED_SESSIONS`, `DEFAULT_WRITES_PER_MINUTE`, `MAX_REASON_LENGTH`, `MIN_ROTATE_BYTES`, `MAX_GRID_COLUMNS`, `MAX_CARD_ROWS`, `MAX_LAYOUT_BYTES`, `MAX_LAYOUT_ENTRIES`, `MIN_IMAGE_HEIGHT`, `MAX_IMAGE_HEIGHT`, `MAX_ALT_LENGTH`, `MAX_QR_VERSION`, `MAX_QR_BYTES`, `MAX_SECTIONS_PER_GROUP`, `MAX_LIST_CARD_VALUES`, `MAX_LAYOUT_MARKS_PER_GROUP` | See [limits](limits.md). |
 
 ## `@osqd/admin-panel-builder/adapters`
 

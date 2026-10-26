@@ -104,6 +104,8 @@ export class GridView {
     readonly element: HTMLElement,
     readonly shape: GridShape,
     private readonly list: boolean,
+    /** Keep the cards in the order given instead of gathering them by kind (a divided group: see divided.ts). */
+    private readonly keepOrder = false,
   ) {
     this.effective = list ? 1 : shape.columns;
     element.style.setProperty("--apb-row", `${shape.rowHeight}px`);
@@ -182,7 +184,7 @@ export class GridView {
     if (!keepSizes) this.fixed.clear();
     this.settled = false;
     this.fitted = false;
-    this.order = gather(this.cards.map((card) => ({ id: card.id, label: card.label, family: card.sizing.family }))).map((card) => card.id);
+    this.order = this.keepOrder ? this.cards.map((card) => card.id) : gather(this.cards.map((card) => ({ id: card.id, label: card.label, family: card.sizing.family }))).map((card) => card.id);
     this.automatic = true;
     if (draw) this.layout();
   }

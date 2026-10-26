@@ -31,7 +31,7 @@ export interface ArrangeHost {
   readonly deps: ViewDeps;
   schema(): PanelSchema;
   /** The group whose tab is open, choosing the first group when another tab is. */
-  arrangeableGroup(): { id: string; title: string } | undefined;
+  arrangeableGroup(): { id: string; title: string; grid?: string } | undefined;
   readonly grids: ReadonlyMap<string, GridView>;
   /** Where the arranging bar goes: the end of the page's main region. */
   mainRegion(): HTMLElement;
@@ -50,7 +50,7 @@ const SCROLL_EDGE = 60;
 export function startArranging(host: ArrangeHost): Arranging | undefined {
   const group = host.arrangeableGroup();
   if (group === undefined) return undefined;
-  const found = host.grids.get(group.id);
+  const found = host.grids.get(group.grid ?? group.id);
   if (found === undefined) return undefined;
   const view: GridView = found;
   const { t, prefs, deps } = host;
@@ -87,7 +87,9 @@ export function startArranging(host: ArrangeHost): Arranging | undefined {
   button(t("layoutCancel"), "apb-tool", () => stop(true));
   button(t("layoutSaveMine"), host.schema().layoutWritable !== true ? "apb-button" : "apb-button apb-button-quiet", () => {
     const layouts: PanelLayout = { ...(prefs.layout ?? {}) };
-    layouts[group.id] = view.saved();
+    const mine = withRun(layouts[group.id], view, view.saved());
+    if (mine === undefined) delete layouts[group.id];
+    else layouts[group.id] = mine;
     prefs.layout = layouts;
     prefs.save();
     said.textContent = t("layoutSavedMine");
@@ -98,8 +100,9 @@ export function startArranging(host: ArrangeHost): Arranging | undefined {
     const everybody = button(t("layoutSaveAll"), "apb-button", () => {
       const shared: PanelLayout = { ...(host.schema().layout ?? {}) };
       // The automatic layout is what the code gives: saving it for everybody is saving nothing.
-      if (view.isAutomatic()) delete shared[group.id];
-      else shared[group.id] = view.saved();
+      const merged = withRun(shared[group.id], view, view.isAutomatic() ? {} : view.saved());
+      if (merged === undefined) delete shared[group.id];
+      else shared[group.id] = merged;
       everybody.disabled = true;
       api.saveLayout(Object.keys(shared).length === 0 ? null : shared).then(
         () => {
@@ -360,4 +363,19 @@ export function startArranging(host: ArrangeHost): Arranging | undefined {
   }
 
   return { stop };
+}
+
+/**
+ * A group's layout with one grid's part replaced. A group drawn in sections has a grid for each run
+ * of cards, and arranging one of them must keep what was chosen for the others; for a group of one
+ * grid this is that grid's layout. Nothing left is no layout at all.
+ */
+function withRun(previous: GroupLayout | undefined, view: GridView, part: GroupLayout): GroupLayout | undefined {
+  const mine = new Set(view.declared().map((card) => card.id));
+  const order = [...(previous?.order ?? []).filter((id) => !mine.has(id)), ...(part.order ?? [])];
+  const sizes = { ...Object.fromEntries(Object.entries(previous?.sizes ?? {}).filter(([id]) => !mine.has(id))), ...(part.sizes ?? {}) };
+  const out: GroupLayout = {};
+  if (order.length > 0) out.order = order;
+  if (Object.keys(sizes).length > 0) out.sizes = sizes;
+  return out.order === undefined && out.sizes === undefined ? undefined : out;
 }

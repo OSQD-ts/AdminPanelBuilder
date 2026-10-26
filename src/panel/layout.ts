@@ -39,8 +39,8 @@ export const DEFAULT_GRID: GridConfig = { columns: 12, rowHeight: 72 };
 export const FEWER_COLUMNS_BELOW = 900;
 export const ONE_COLUMN_BELOW = 560;
 
-/** Widths on a 12-column grid for the old `span`: a third, a half, three quarters, all. */
-const SPAN_WIDTHS: Record<string, number> = { "1": 3, "2": 6, "3": 9, full: 12 };
+/** Widths on a 12-column grid for `span`: the old 1, 2 and 3, and the shares of a row by name. */
+export const SPAN_WIDTHS: Record<string, number> = { "1": 3, "2": 6, "3": 9, full: 12, quarter: 3, third: 4, half: 6, "two-thirds": 8, "three-quarters": 9 };
 
 /** A width given for a 12-column grid, on a grid of `columns`. */
 function fromTwelve(w: number, columns: number): number {
@@ -83,7 +83,8 @@ export function sizingOf(item: ItemSchema, columns: number, chart?: DrawnAs): Si
     return { pref: fixed, min: fixed, max: fixed, locked: true, family };
   }
   const min = scale(kind.min);
-  const max = scale(kind.max);
+  // A span is a width asked for by name: it may take the card past the width its kind would stop at.
+  const max = span === undefined ? scale(kind.max) : { ...scale(kind.max), w: Math.max(scale(kind.max).w, pref.w) };
   return { pref: { w: Math.min(Math.max(pref.w, min.w), max.w), h: pref.h }, min, max, locked: false, family };
 }
 

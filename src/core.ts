@@ -39,6 +39,7 @@ import { APPROVAL_TTL_MS, Approvals, MAX_PENDING } from "./panel/approvals.js";
 import { ChartRegistry, MAX_SERIES } from "./panel/charts.js";
 import { checkCardSize, checkGroupName, checkPoll, checkScheme, checkSpan, checkTitle, defaultOnError, describe, looksSecret, message, MIN_POLL_INTERVAL_MS, readSafely, sameJson } from "./panel/checks.js";
 import { PanelGroup } from "./panel/group.js";
+import { PanelStructure, PLACEMENT_KEYS } from "./panel/structure.js";
 import { Replication } from "./panel/replication.js";
 import { diffSettings, exportSettings } from "./panel/settings.js";
 import { actionSchema, checkCondition, checkReason, checkReasonOption, conditionOf, decorateWire, MAX_REASON_LENGTH, scheduledShape, valueSchema } from "./panel/wire.js";
@@ -68,6 +69,9 @@ import type {
   FeedSchema,
   GroupLayout,
   GroupOptions,
+  ListCardOptions,
+  MarkOptions,
+  SectionOptions,
   GroupSchema,
   GridShape,
   ItemSchema,
@@ -172,7 +176,12 @@ export const MAX_NOTICES = 100;
 /** The longest a timed change may wait to revert: a week. Longer is a setting, not a temporary one. */
 export const MAX_REVERT_MS = 7 * 24 * 3_600_000;
 
-const COMMON_KEYS = ["id", "label", "description", "group", "order", "span", "size"];
+/** The card id an item is drawn as on the page: `type:id`. */
+function itemKey(item: ItemSchema): string {
+  return `${item.type}:${item.id}`;
+}
+
+const COMMON_KEYS = ["id", "label", "description", "group", "order", "span", "size", ...PLACEMENT_KEYS];
 const VIEWABLE_KEYS = [...COMMON_KEYS, "kind", "unit", "format", "dateFormat", "image", "qr", "decimals", "chart", "sensitive", "min", "max", "status", "alert", "visibleWhen", "disabledWhen", "timeline"];
 const MODIFIABLE_KEYS = [...VIEWABLE_KEYS, "step", "integer", "options", "maxLength", "pattern", "multiline", "validate", "onChange", "persist", "confirm", "approval", "timed", "validateAsync", "validateTimeoutMs", "reason"];
 
@@ -187,7 +196,7 @@ export interface ChangeOptions {
 /** Every group and every control: what the panel uses for changes it makes itself (a schedule firing). */
 const INTERNAL: PanelScope = { groups: undefined, edit: true, actions: true, restrictions: [] };
 const BIND_KEYS = [...MODIFIABLE_KEYS, "editable"];
-const SHARED_CHART_KEYS = ["kind", "over", "title", "group", "series", "description", "order", "span", "size", "points", "sampleEveryMs", "min", "max", "stacked", "lines", "annotate", "bins"];
+const SHARED_CHART_KEYS = ["kind", "over", "title", "group", "series", "description", "order", "span", "size", "section", "emphasis", "points", "sampleEveryMs", "min", "max", "stacked", "lines", "annotate", "bins"];
 const PANEL_KEYS = ["title", "instance", "theme", "themes", "grid", "colorScheme", "pollIntervalMs", "defaultGroup", "store", "clock", "onError", "changeLog", "locale", "timeZone", "dateFormat", "dateLocale", "messages", "sync", "keepHistory", "actionVisibility"];
 const SWAPPABLE_KEYS = ["title", "instance", "theme", "colorScheme", "pollIntervalMs"];
 const HISTORY_KEY = "apb.history";
@@ -279,6 +288,8 @@ export class AdminPanel implements ValueOwner {
   readonly actionVisibility: ActionVisibility;
   private feedSequence = 0;
   private sequence = 0;
+  /** Sections, list cards, dividers and spacers: how each group is divided for reading. */
+  private readonly division = new PanelStructure(() => this.sequence++);
   private unnamed = 0;
   private version = 0;
   private structure = 1;
@@ -436,7 +447,7 @@ export class AdminPanel implements ValueOwner {
   /** A button that runs `run` in the application. Usable only on a listener that grants `controls.actions`. */
   action(label: string, run: (context: ActionContext) => unknown, options: ActionOptions = {}): PanelAction {
     if (typeof run !== "function") throw new AdminPanelConfigError(`action "${label}" needs a function to run`);
-    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "size", "confirm", "destructive", "timeoutMs", "input", "visibleWhen", "disabledWhen", "approval", "reason", "visibility"], `action("${label}")`);
+    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "size", "section", "emphasis", "confirm", "destructive", "timeoutMs", "input", "visibleWhen", "disabledWhen", "approval", "reason", "visibility"], `action("${label}")`);
     if (options.confirm !== undefined && typeof options.confirm !== "boolean" && options.confirm !== "type") throw new AdminPanelConfigError(`action "${label}" has confirm ${JSON.stringify(options.confirm)}; it is true, false or "type"`);
     checkReasonOption(label, options.reason);
     const id = checkId(options.id ?? (slug(label) || `action-${this.actions.size + 1}`), `action "${label}"`);
@@ -469,6 +480,7 @@ export class AdminPanel implements ValueOwner {
       group,
     );
     if (options.input !== undefined) this.inputs.set(id, resolveInput(label, options.input));
+    this.division.place(`action:${id}`, group, options, label);
     this.actions.set(id, action);
     this.structureChanged();
     return action;
@@ -485,6 +497,7 @@ export class AdminPanel implements ValueOwner {
     checkSpan(label, options.span);
     checkCardSize(label, options.size);
     const table = new PanelTable<Row>(id, checkTitle(options.label ?? label), options, this.ensureGroup(options.group ?? this.defaultGroup), this.sequence++);
+    this.division.place(`table:${id}`, table.group, options, label);
     this.tables.set(id, table as unknown as PanelTable<never>);
     this.structureChanged();
     return table;
@@ -492,7 +505,7 @@ export class AdminPanel implements ValueOwner {
 
   /** A bounded list of events, newest first. `feed.push("text")` or `feed.push({ fields }, "warn")`. */
   feed(label: string, options: FeedOptions = {}): PanelFeed {
-    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "size", "capacity", "perSecond"], `feed("${label}")`);
+    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "size", "section", "emphasis", "capacity", "perSecond"], `feed("${label}")`);
     const id = checkId(options.id ?? (slug(label) || `feed-${this.feeds.size + 1}`), `feed "${label}"`);
     if (this.feeds.has(id)) throw new AdminPanelConfigError(`two feeds have the id "${id}"`);
     const capacity = options.capacity ?? 200;
@@ -505,6 +518,7 @@ export class AdminPanel implements ValueOwner {
       this.clock,
       () => ++this.feedSequence,
     );
+    this.division.place(`feed:${id}`, feed.group, options, label);
     this.feeds.set(id, feed);
     this.structureChanged();
     return feed;
@@ -515,7 +529,7 @@ export class AdminPanel implements ValueOwner {
    * all, with one change record, and only on a listener that may edit every value it sets.
    */
   profile(label: string, settings: ReadonlyArray<readonly [PanelValue<unknown>, unknown]>, options: ProfileOptions = {}): string {
-    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "size", "confirm", "approval", "reason"], `profile("${label}")`);
+    rejectUnknown(options, ["id", "label", "description", "group", "order", "span", "size", "section", "emphasis", "confirm", "approval", "reason"], `profile("${label}")`);
     checkReasonOption(label, options.reason);
     const id = checkId(options.id ?? (slug(label) || `profile-${this.profiles.size + 1}`), `profile "${label}"`);
     if (this.profiles.has(id)) throw new AdminPanelConfigError(`two profiles have the id "${id}"`);
@@ -534,6 +548,7 @@ export class AdminPanel implements ValueOwner {
       approval: options.approval === true,
       reasonRequired: options.reason === "required" || options.approval === true,
     });
+    this.division.place(`profile:${id}`, (this.profiles.get(id) as ProfileEntry).group, options, label);
     if (this.stored !== undefined) this.schedule.restore(this.stored[SCHEDULE_KEY], "profile", id);
     this.structureChanged();
     return id;
@@ -545,8 +560,13 @@ export class AdminPanel implements ValueOwner {
    */
   group(name: string, options?: GroupOptions): PanelGroup {
     const entry = this.groups.get(this.ensureGroup(name)) as GroupEntry;
-    rejectUnknown(options, ["title", "description", "order", "layout", "grid"], `group("${name}")`);
+    rejectUnknown(options, ["title", "description", "order", "layout", "grid", "sections", "outline", "filter", "density"], `group("${name}")`);
     if (options?.layout !== undefined && options.layout !== "grid" && options.layout !== "list") throw new AdminPanelConfigError(`group "${name}" has a layout of ${JSON.stringify(options.layout)}; it is "grid" or "list"`);
+    if (options?.sections !== undefined && options.sections !== "stack" && options.sections !== "tabs") throw new AdminPanelConfigError(`group "${name}" shows its sections as ${JSON.stringify(options.sections)}; it is "stack" or "tabs"`);
+    for (const key of ["outline", "filter"] as const) {
+      if (options?.[key] !== undefined && typeof options[key] !== "boolean") throw new AdminPanelConfigError(`group "${name}": ${key} is true or false`);
+    }
+    if (options?.density !== undefined && options.density !== "compact" && options.density !== "comfortable") throw new AdminPanelConfigError(`group "${name}" has density ${JSON.stringify(options.density)}; it is "compact" or "comfortable"`);
     if (options?.grid !== undefined) {
       const grid = checkGrid(options.grid);
       if (typeof grid === "string") throw new AdminPanelConfigError(`group "${name}": ${grid}`);
@@ -558,6 +578,49 @@ export class AdminPanel implements ValueOwner {
     return new PanelGroup(this, entry.name);
   }
 
+  /**
+   * A section of a group: a heading with a line about it, over its own grid of cards. Anything
+   * declared with `section: name` is drawn in it; this only adds options, and may come before or
+   * after the declarations. Sections are drawn in `order`, then in order of first mention.
+   */
+  section(name: string, options: SectionOptions = {}): this {
+    this.division.section(this.ensureGroup(options.group ?? this.defaultGroup), name, options);
+    this.structureChanged();
+    return this;
+  }
+
+  /**
+   * One card holding several values as rows — label, reading and, where it can be changed, its
+   * field — for the many small settings that would otherwise be a card each. Values join it with
+   * `card: name`; this only adds options.
+   */
+  card(name: string, options: ListCardOptions = {}): this {
+    this.division.card(this.ensureGroup(options.group ?? this.defaultGroup), name, options);
+    this.structureChanged();
+    return this;
+  }
+
+  /** A line across the group (or a section of it) between the cards declared before and after it, with a label in its middle if given. */
+  divider(options: MarkOptions = {}): this {
+    return this.mark("divider", options);
+  }
+
+  /** Empty room between the cards declared before and after it. */
+  spacer(options: MarkOptions = {}): this {
+    return this.mark("spacer", options);
+  }
+
+  /** Ends the row: the next card starts on a row of its own. */
+  break(options: MarkOptions = {}): this {
+    return this.mark("break", options);
+  }
+
+  private mark(kind: "divider" | "spacer" | "break", options: MarkOptions): this {
+    this.division.mark(this.ensureGroup(options.group ?? this.defaultGroup), kind, options);
+    this.structureChanged();
+    return this;
+  }
+
   /** A chart of the group's own, drawing several values together. */
   chart(options: SharedChartOptions): string {
     rejectUnknown(options, SHARED_CHART_KEYS, `chart("${options.title}")`);
@@ -565,7 +628,9 @@ export class AdminPanel implements ValueOwner {
     for (const value of options.series) this.assertOwn(value, `chart "${options.title}"`);
     const first = options.series[0] as PanelValue<unknown>;
     const group = this.ensureGroup(options.group ?? first.group);
-    const entry = this.charts.build(options.title, { ...options, in: undefined } as ChartOptions & { span?: Span | undefined; size?: CardSize | undefined; order?: number | undefined }, options.series, "group", group, options.description);
+    const { section, emphasis, ...drawn } = options;
+    const entry = this.charts.build(options.title, { ...drawn, in: undefined } as ChartOptions & { span?: Span | undefined; size?: CardSize | undefined; order?: number | undefined }, options.series, "group", group, options.description);
+    this.division.place(`chart:${entry.id}`, group, { section, emphasis }, options.title);
     return entry.id;
   }
 
@@ -589,6 +654,7 @@ export class AdminPanel implements ValueOwner {
     if (item instanceof PanelAction) {
       if (this.actions.get(item.id) !== item) throw new AdminPanelConfigError(`action "${item.label}" belongs to another panel`);
       item.group = this.ensureGroup(group);
+      this.division.moved(`action:${item.id}`, item.group);
       this.structureChanged();
       return;
     }
@@ -767,11 +833,16 @@ export class AdminPanel implements ValueOwner {
     const groups: GroupSchema[] = [];
     for (const group of this.orderedGroups()) {
       if (!visible(scope, group.name)) continue;
-      const items = this.itemsOf(group.name, scope);
+      const { items, sequence } = this.itemsOf(group.name, scope);
       if (items.length === 0) continue;
       const schema: GroupSchema = { id: group.id, title: group.options.title ?? group.name, layout: group.options.layout ?? "grid", items };
       if (group.options.description !== undefined) schema.description = group.options.description;
       if (group.options.grid !== undefined) schema.grid = { ...this.grid, ...(checkGrid(group.options.grid) as Partial<GridShape>) };
+      this.division.annotate(group.name, schema, itemKey, sequence);
+      if (group.options.sections === "tabs") schema.sectionTabs = true;
+      if (group.options.outline !== undefined) schema.outline = group.options.outline;
+      if (group.options.filter !== undefined) schema.filter = group.options.filter;
+      if (group.options.density !== undefined) schema.density = group.options.density;
       groups.push(schema);
     }
     const schema: PanelSchema = {
@@ -1345,6 +1416,7 @@ export class AdminPanel implements ValueOwner {
   moveValue(value: PanelValue<unknown>, group: string): void {
     this.assertOwn(value, "moveTo()");
     value.group = this.ensureGroup(group);
+    this.division.moved(`value:${value.id}`, value.group);
     this.structureChanged();
   }
 
@@ -1478,6 +1550,7 @@ export class AdminPanel implements ValueOwner {
     };
     if (options.approval === true && !editable) throw new AdminPanelConfigError(`"${shown}" asks for approval but is not modifiable`);
     const group = this.ensureGroup(options.group ?? this.defaultGroup);
+    this.division.place(`value:${id}`, group, options, shown);
     const value = new PanelValue<T>(definition, source, this, group, this.clock.now());
     // The declared starting value has to satisfy the declaration, or the first unchanged
     // submission of the form would be refused.
@@ -1740,7 +1813,7 @@ export class AdminPanel implements ValueOwner {
     this.onError(error, `onChange of "${value.id}"`);
   }
 
-  private itemsOf(group: string, scope: PanelScope): ItemSchema[] {
+  private itemsOf(group: string, scope: PanelScope): { items: ItemSchema[]; sequence: Array<{ kind: "item"; item: ItemSchema } | { kind: "mark"; id: string }> } {
     // Within an order, values first, then the group's own charts, tables and feeds, then profiles
     // and actions: a chart drawing several values reads best after them, and buttons that change
     // things sit at the end.
@@ -1779,8 +1852,18 @@ export class AdminPanel implements ValueOwner {
       if (action.group !== group) continue;
       entries.push({ order: action.definition.order, rank: 2, sequence: action.definition.sequence, items: [actionSchema(action, canRun(scope, group), this.inputs.get(action.id))] });
     }
-    entries.sort((a, b) => a.order - b.order || a.rank - b.rank || a.sequence - b.sequence);
-    return entries.flatMap((entry) => entry.items);
+    // A group with dividers, spacers or breaks reads in the order it was written: each of them
+    // stands between the cards declared before and after it, which ranking by kind would undo.
+    const marks = this.division.marksOf(group);
+    const written = marks.length > 0;
+    const all: Array<Ordered & { mark?: string }> = [...entries, ...marks.map((mark) => ({ order: mark.order, rank: 0, sequence: mark.sequence, items: [], mark: mark.id }))];
+    all.sort((a, b) => a.order - b.order || (written ? 0 : a.rank - b.rank) || a.sequence - b.sequence);
+    const sequence: Array<{ kind: "item"; item: ItemSchema } | { kind: "mark"; id: string }> = [];
+    for (const entry of all) {
+      if (entry.mark !== undefined) sequence.push({ kind: "mark", id: entry.mark });
+      else for (const item of entry.items) sequence.push({ kind: "item", item });
+    }
+    return { items: all.flatMap((entry) => entry.items), sequence };
   }
 
   private orderedGroups(): GroupEntry[] {

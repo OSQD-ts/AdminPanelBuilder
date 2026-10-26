@@ -17,6 +17,75 @@ function slotClasses(): string {
   return lines.join("\n");
 }
 
+/**
+ * A group drawn in parts (src/client/divided.ts): sections with headings, list cards whose rows are
+ * value cards, dividers and spacers, the outline and the filter box, and how much a card stands out.
+ * Last in the sheet so emphasis sits over the reading sizes the grid chooses.
+ */
+const DIVIDED_CSS = `
+.apb-divided [hidden] { display: none !important; }
+.apb-divided { display: grid; gap: calc(var(--apb-spacing) * 2); }
+.apb-group-filter { max-width: 22rem; }
+.apb-outline { display: flex; flex-wrap: wrap; gap: calc(var(--apb-spacing) * .75); }
+.apb-outline-link { cursor: pointer; padding: .25em .85em; border: 1px solid var(--apb-border); border-radius: 999px; background: var(--apb-surface); color: var(--apb-ink-secondary); font: inherit; font-size: .85em; }
+.apb-outline-link:hover { color: var(--apb-ink); border-color: var(--apb-accent); }
+.apb-subtabs { margin-block-end: calc(var(--apb-spacing) * .5); }
+.apb-section { display: grid; gap: calc(var(--apb-spacing) * 1.5); margin-block-start: calc(var(--apb-spacing) * 1.5); scroll-margin-top: 7rem; }
+.apb-section-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: calc(var(--apb-spacing) * .5) calc(var(--apb-spacing) * 1.5); padding-block-end: calc(var(--apb-spacing) * .75); border-bottom: 1px solid var(--apb-border); }
+.apb-section-title { margin: 0; font-size: 1.05em; font-weight: var(--apb-strong-weight); color: var(--apb-ink); }
+.apb-section-toggle { display: inline-flex; align-items: center; gap: calc(var(--apb-spacing) * .75); padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: start; }
+.apb-section-toggle:focus-visible { outline: 2px solid var(--apb-focus); outline-offset: 3px; border-radius: var(--apb-radius-small); }
+.apb-section-chevron { width: .5em; height: .5em; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg) translate(-.1em, -.1em); transition: transform .15s ease; flex: none; }
+.apb-section[data-closed] .apb-section-chevron { transform: rotate(-45deg); }
+.apb-section[data-closed] .apb-section-head { border-bottom-color: transparent; }
+.apb-section-description { margin: 0; flex-basis: 100%; color: var(--apb-ink-secondary); font-size: .9em; }
+.apb-section-body { display: grid; gap: calc(var(--apb-spacing) * 2); }
+.apb-divider { height: 1px; background: var(--apb-border); margin-block: calc(var(--apb-spacing) * .5); }
+.apb-divider-label { display: flex; align-items: center; gap: calc(var(--apb-spacing) * 1.5); height: auto; background: none; color: var(--apb-muted); font-size: .8em; font-weight: var(--apb-strong-weight); letter-spacing: .06em; text-transform: uppercase; }
+.apb-divider-label::before, .apb-divider-label::after { content: ""; flex: 1; height: 1px; background: var(--apb-border); }
+.apb-spacer[data-size="sm"] { height: var(--apb-spacing); }
+.apb-spacer[data-size="md"] { height: calc(var(--apb-spacing) * 3); }
+.apb-spacer[data-size="lg"] { height: calc(var(--apb-spacing) * 7); }
+.apb-listcard-rows { display: grid; align-content: start; column-gap: calc(var(--apb-spacing) * 4); }
+.apb-listcard[data-layout="columns:2"] .apb-listcard-rows { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.apb-listcard[data-layout="columns:3"] .apb-listcard-rows { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.apb-listcard[data-layout="grid"] .apb-listcard-rows { grid-template-columns: repeat(auto-fill, minmax(11em, 1fr)); gap: calc(var(--apb-spacing) * 1.5); }
+.apb-card.apb-row { display: grid; grid-template-columns: minmax(7em, 2fr) minmax(0, 3fr); grid-template-rows: auto; align-items: center; gap: calc(var(--apb-spacing) * .5) calc(var(--apb-spacing) * 2); padding: calc(var(--apb-spacing) * .9) 0; border: 0; border-top: 1px solid var(--apb-border); border-radius: 0; background: transparent; box-shadow: none; }
+.apb-listcard[data-layout="list"] .apb-row:first-child, .apb-listcard[data-layout^="columns"] .apb-row:nth-child(-n + 2) { border-top: 0; }
+.apb-listcard[data-layout="columns:3"] .apb-row:nth-child(3) { border-top: 0; }
+.apb-listcard[data-layout="grid"] .apb-row { grid-template-columns: 1fr; padding: calc(var(--apb-spacing) * 1.25); border: 1px solid var(--apb-border); border-radius: var(--apb-radius-small); }
+.apb-row .apb-card-head { min-width: 0; gap: calc(var(--apb-spacing) * .5); }
+.apb-row .apb-label { font-size: .92em; }
+.apb-row :is(.apb-badges, .apb-description, .apb-stats, .apb-trend, .apb-meta) { display: none; }
+.apb-row .apb-card-head { justify-content: space-between; }
+.apb-row .apb-card-tools { opacity: 0; transition: opacity .15s ease; }
+.apb-row:is(:hover, :focus-within) .apb-card-tools { opacity: 1; }
+@media (hover: none) { .apb-row .apb-card-tools { opacity: .7; } }
+.apb-row .apb-card-body { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: calc(var(--apb-spacing) * .75) calc(var(--apb-spacing) * 1.5); min-width: 0; }
+.apb-listcard[data-layout="grid"] .apb-row .apb-card-body { justify-content: flex-start; }
+.apb-row .apb-reading { display: flex; align-items: baseline; gap: calc(var(--apb-spacing) * .75); min-width: 0; }
+/* Over every reading size the grid gives a card's value: a row's reading is text-sized. */
+.apb-grid > .apb-listcard.apb-card .apb-row .apb-value:not(.apb-value-json, .apb-value-text) { font-size: 1.1em; letter-spacing: 0; }
+.apb-grid > .apb-listcard.apb-card { grid-template-rows: none; align-content: start; }
+.apb-row .apb-editor { flex: 1 1 13em; min-width: 0; max-width: 22em; }
+@container apb-card (max-width: 30em) {
+  .apb-listcard[data-layout] .apb-listcard-rows { grid-template-columns: 1fr; }
+  .apb-listcard[data-layout] .apb-row:nth-child(n + 2) { border-top: 1px solid var(--apb-border); }
+  .apb-listcard[data-layout="grid"] .apb-listcard-rows { grid-template-columns: repeat(auto-fill, minmax(8em, 1fr)); }
+  .apb-card.apb-row { grid-template-columns: 1fr; }
+  .apb-row .apb-card-body { justify-content: flex-start; }
+}
+.apb-grid > .apb-card[data-emphasis="primary"] { border-color: color-mix(in srgb, var(--apb-accent) 45%, var(--apb-border)); box-shadow: inset 0 3px 0 var(--apb-accent), var(--apb-shadow); }
+.apb-grid > .apb-card[data-emphasis="primary"] .apb-value:not(.apb-value-json, .apb-value-text) { font-size: clamp(2em, 11cqi, 3.8em); }
+.apb-grid > .apb-card[data-emphasis="secondary"] { background: transparent; box-shadow: none; }
+.apb-grid > .apb-card[data-emphasis="secondary"] .apb-value:not(.apb-value-json, .apb-value-text) { font-size: 1.25em; color: var(--apb-ink-secondary); }
+.apb-grid > .apb-card[data-emphasis="secondary"] .apb-label { color: var(--apb-muted); }
+:is(.apb-divided, .apb-section)[data-density="compact"] .apb-card { padding: var(--apb-spacing) calc(var(--apb-spacing) * 1.25) calc(var(--apb-spacing) * 1.25); gap: calc(var(--apb-spacing) / 2); }
+:is(.apb-divided, .apb-section)[data-density="compact"] .apb-card.apb-row { padding: calc(var(--apb-spacing) * .5) 0; }
+:is(.apb-divided, .apb-section)[data-density="comfortable"] .apb-card:not(.apb-row) { padding: calc(var(--apb-spacing) * 2.75) calc(var(--apb-spacing) * 3); }
+:is(.apb-divided, .apb-section)[data-density="comfortable"] .apb-grid { gap: calc(var(--apb-spacing) * 2.5); }
+`;
+
 export const LAYOUT_CSS = `
 /* ---- Frame -------------------------------------------------------------------------------
    Layers, back to front: the page, the cards on it, the band of tabs that stays in reach, the bar
@@ -737,4 +806,4 @@ th[aria-sort="descending"] .apb-sort::after { content: " ▼"; color: var(--apb-
   .apb-root *, .apb-root *::before, .apb-root *::after { animation: none !important; transition: none !important; }
 }
 ${slotClasses()}
-`;
+${DIVIDED_CSS}`;

@@ -151,8 +151,9 @@ jobs:
           tarball=$(ls osqd-admin-panel-builder-*.tgz)
           size=$(stat -c%s "$tarball")
           echo "$tarball: $size bytes"
-          # ESM split and CJS without maps put it near 1.3 MB; past 2 MB something is bundled twice again.
-          test "$size" -lt 2000000
+          # ESM split and CJS without maps put it near 1.3 MB at first; the features since then put it
+          # at 2.08 MB. Past 2.25 MB something is bundled twice again. Kept equal to the CI budget.
+          test "$size" -lt 2250000
           for required in package/dist/index.js package/dist/index.cjs package/dist/index.d.ts package/dist/cli.js package/dist/adapters/index.js package/dist/element.js package/dist/presets/index.js package/dist/sdk.js package/dist/testing.js package/dist/config/index.js package/admin-panel.toml package/bin/apb.mjs package/docs/index.md package/README.md package/LICENSE; do
             tar -tzf "$tarball" | grep -qx "$required" || { echo "::error::$required is missing from the tarball"; exit 1; }
           done

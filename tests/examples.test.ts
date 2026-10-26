@@ -11,6 +11,7 @@ import { buildChangeControlPanel } from "../examples/change-control.js";
 import { buildConfiguredPanel } from "../examples/configuration.js";
 import { buildEmbeddedPanel } from "../examples/embedding.js";
 import { buildFleet } from "../examples/fleet.js";
+import { buildLayoutPanel } from "../examples/layout.js";
 import { buildQuickstart } from "../examples/quickstart.js";
 import { buildServicePanel } from "../examples/service.js";
 import { EVERYTHING } from "../src/testing.js";
@@ -39,7 +40,7 @@ const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 type Schema = { groups: Array<{ title: string; items: Array<{ id: string; type: string; kind?: string }> }>; controls: { edit: boolean; actions: boolean } };
 const schemaOf = async (response: Response): Promise<Schema> => ((await response.json()) as { schema: Schema }).schema;
 
-describe.each(["examples/quickstart.ts", "examples/service.ts", "examples/change-control.ts"])("%s", (file) => {
+describe.each(["examples/quickstart.ts", "examples/service.ts", "examples/change-control.ts", "examples/layout.ts"])("%s", (file) => {
   it("starts, prints its URL on stdout, and serves its panel to the token", { timeout: 30_000 }, async () => {
     const url = await start(file);
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?token=/);
@@ -52,7 +53,7 @@ describe.each(["examples/quickstart.ts", "examples/service.ts", "examples/change
 
 describe("every example's panel", () => {
   it("builds and survives its own simulation without a warning", () => {
-    const panels = [buildQuickstart(), buildServicePanel(), buildChangeControlPanel(), buildAccessPanel({ secret: "s".repeat(40), monitorToken: TOKEN }), buildEmbeddedPanel({ token: TOKEN }), buildConfiguredPanel(), ...buildFleet(2)];
+    const panels = [buildQuickstart(), buildServicePanel(), buildChangeControlPanel(), buildAccessPanel({ secret: "s".repeat(40), monitorToken: TOKEN }), buildEmbeddedPanel({ token: TOKEN }), buildConfiguredPanel(), buildLayoutPanel(), buildLayoutPanel({ divided: false }), ...buildFleet(2)];
     for (const { panel, tick } of panels) {
       for (let i = 0; i < 60; i += 1) tick();
       expect(panel.schema().groups.length).toBeGreaterThan(0);
@@ -167,6 +168,23 @@ describe("examples/embedding.ts", () => {
     const schema = await schemaOf(await fetchRoutes.next.GET(new Request("http://shop.example/edge/api/schema", { headers: bearer(TOKEN) })));
     expect(schema.groups.map((group) => group.title)).toEqual(["Orders", "Stock"]);
     panel.close();
+  });
+});
+
+describe("examples/layout.ts", () => {
+  it("draws the same forty values in sections and list cards, or flat when asked", () => {
+    const { panel } = buildLayoutPanel();
+    const server = panel.schema().groups[0];
+    expect(server?.sections?.map((section) => section.title)).toEqual(["Right now", "Matches", "Moderation", "Limits", "Health"]);
+    expect(server?.sections?.filter((section) => section.collapsed === true).map((section) => section.title)).toEqual(["Limits", "Health"]);
+    expect(server?.cards?.length).toBe(7);
+    expect(server?.marks?.map((mark) => mark.label)).toEqual(["Machines"]);
+    expect(server?.items.filter((item) => item.emphasis === "primary")).toHaveLength(3);
+    const flat = buildLayoutPanel({ divided: false }).panel;
+    expect(flat.schema().groups[0]?.items.length).toBe(server?.items.length);
+    expect(flat.schema().groups[0]).not.toHaveProperty("sections");
+    panel.close();
+    flat.close();
   });
 });
 

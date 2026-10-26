@@ -14,10 +14,15 @@
 import type { AdminPanel } from "../core.js";
 import { AdminPanelConfigError } from "../errors.js";
 import { rejectUnknown } from "../internal/options.js";
-import type { CardSize, ChartKind, Span, ValueFormat } from "../types.js";
+import type { CardSize, ChartKind, Emphasis, Span, ValueFormat } from "../types.js";
 import type { PanelValue } from "../values/handle.js";
 
 export interface CounterOptions {
+  /** The section of its group it is drawn in. */
+  section?: string | undefined;
+  /** A list card it is a row of. */
+  card?: string | undefined;
+  emphasis?: Emphasis | undefined;
   id?: string | undefined;
   description?: string | undefined;
   group?: string | undefined;
@@ -41,13 +46,13 @@ export interface Counter {
   reset(): void;
 }
 
-const COUNTER_KEYS = ["id", "description", "group", "order", "span", "size", "per", "windowMs", "chart"];
+const COUNTER_KEYS = ["id", "description", "group", "order", "span", "size", "section", "card", "emphasis", "per", "windowMs", "chart"];
 
 export function declareCounter(panel: AdminPanel, label: string, options: CounterOptions = {}): Counter {
   rejectUnknown(options, COUNTER_KEYS, `counter("${label}")`);
   const windowMs = checkWindow(label, options.windowMs);
   const per = options.per ?? "second";
-  const common = { group: options.group, order: options.order, span: options.span, size: options.size };
+  const common = { group: options.group, order: options.order, span: options.span, size: options.size, section: options.section, card: options.card, emphasis: options.emphasis };
   const total = panel.viewable(0, { ...common, id: options.id, label, format: "integer", description: options.description });
   panel.markCounter(total.id);
   const rate = rateOf(panel, `${label} per ${per}`, () => total.value, { ...common, per, windowMs, chart: options.chart ?? true, id: options.id === undefined ? undefined : `${options.id}-rate` });
@@ -65,6 +70,11 @@ export function declareCounter(panel: AdminPanel, label: string, options: Counte
 }
 
 export interface RateOptions {
+  /** The section of its group it is drawn in. */
+  section?: string | undefined;
+  /** A list card it is a row of. */
+  card?: string | undefined;
+  emphasis?: Emphasis | undefined;
   id?: string | undefined;
   description?: string | undefined;
   group?: string | undefined;
@@ -79,7 +89,7 @@ export interface RateOptions {
 
 /** The rate of a total the application already keeps: `rate("Requests per second", () => server.handled)`. */
 export function rateOf(panel: AdminPanel, label: string, read: () => number, options: RateOptions = {}): PanelValue<number> {
-  rejectUnknown(options, ["id", "description", "group", "order", "span", "size", "per", "windowMs", "chart", "unit"], `rate("${label}")`);
+  rejectUnknown(options, ["id", "description", "group", "order", "span", "size", "section", "card", "emphasis", "per", "windowMs", "chart", "unit"], `rate("${label}")`);
   const windowMs = checkWindow(label, options.windowMs);
   const scale = options.per === "minute" ? 60_000 : 1000;
   const size = Math.ceil(windowMs / 1000) + 1;
@@ -96,6 +106,9 @@ export function rateOf(panel: AdminPanel, label: string, read: () => number, opt
     order: options.order,
     span: options.span,
     size: options.size,
+    section: options.section,
+    card: options.card,
+    emphasis: options.emphasis,
     decimals: 2,
     unit: options.unit ?? `/${options.per === "minute" ? "min" : "s"}`,
     chart: options.chart === false ? undefined : options.chart === true || options.chart === undefined ? true : options.chart,
@@ -131,6 +144,8 @@ export function rateOf(panel: AdminPanel, label: string, read: () => number, opt
 }
 
 export interface PercentileOptions {
+  section?: string | undefined;
+  emphasis?: Emphasis | undefined;
   group?: string | undefined;
   order?: number | undefined;
   description?: string | undefined;
@@ -152,7 +167,7 @@ export interface Percentiles {
 
 /** Latency and its tail: `const latency = percentiles("Move latency", { unit: "ms" }); latency.record(ms)`. */
 export function declarePercentiles(panel: AdminPanel, label: string, options: PercentileOptions = {}): Percentiles {
-  rejectUnknown(options, ["group", "order", "description", "percentiles", "window", "unit", "format", "chart"], `percentiles("${label}")`);
+  rejectUnknown(options, ["group", "order", "description", "section", "emphasis", "percentiles", "window", "unit", "format", "chart"], `percentiles("${label}")`);
   const wanted = options.percentiles ?? [50, 95, 99];
   if (wanted.length === 0 || wanted.length > 8 || wanted.some((p) => !Number.isFinite(p) || p <= 0 || p >= 100)) {
     throw new AdminPanelConfigError(`percentiles "${label}" asks for ${JSON.stringify(wanted)}; give one to eight percentiles between 0 and 100`);
@@ -167,7 +182,7 @@ export function declarePercentiles(panel: AdminPanel, label: string, options: Pe
   for (const p of wanted) {
     values.set(
       p,
-      panel.viewable(0, { label: `${label} p${p}`, group: options.group, order: options.order, description: options.description, unit: options.unit, format: options.format, decimals: 1, chart: options.chart === false ? undefined : { in: label } }),
+      panel.viewable(0, { label: `${label} p${p}`, group: options.group, order: options.order, section: options.section, emphasis: options.emphasis, description: options.description, unit: options.unit, format: options.format, decimals: 1, chart: options.chart === false ? undefined : { in: label } }),
     );
   }
   panel.every(1000, () => {

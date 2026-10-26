@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Layout inside a tab.** `section(name, { description, collapsed, collapsible, order, density, columns })`
+  and `section:` on any declaration draw a tab in sections with headings, each closable and remembered per
+  viewer. `card(name, { layout: "list" | "grid" | "columns:2" | "columns:3" })` with `card:` on values
+  gathers many small settings into one card of rows, each still edited where it is. `divider({ label })`,
+  `spacer({ size })` and `break()` stand between the cards declared around them. `emphasis: "primary" |
+  "secondary"` makes a card louder or quieter. A group takes `sections: "tabs"` (sections as sub-tabs),
+  `outline`, `filter` (a box narrowing the tab) and `density`. `span` gains `"quarter"`, `"third"`,
+  `"half"`, `"two-thirds"` and `"three-quarters"`. All on the panel and on a group's handle, validated at
+  startup; a panel using none of it is drawn and sent exactly as before. Arranging works one grid at a
+  time and saved layouts keep applying. New limits: `MAX_SECTIONS_PER_GROUP`, `MAX_LIST_CARD_VALUES`,
+  `MAX_LAYOUT_MARKS_PER_GROUP`. See [layout](docs/concepts/layout.md) and `examples/layout.ts`.
 - Row actions on some rows only: `when` hides a row action on rows it does not apply to,
   `enabledWhen` shows it disabled with a reason. Either is a function of the row or a
   `{ field, equals | in }` match on a column. The server works them out for every row it sends

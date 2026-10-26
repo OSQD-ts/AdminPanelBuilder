@@ -79,6 +79,12 @@ router with the new settings for the next request and leaves requests in flight 
 do not validate are refused whole and the old ones stay. A reload that changed something is a notice
 naming who asked. [`examples/configuration.ts`](../../examples/configuration.ts) runs this way.
 
+## What stays in code
+
+Values, actions, groups and how a tab is laid out — sections, list cards, dividers, emphasis — are
+declarations, made where the value lives; a file configures the listener that serves them. See
+[layout](../concepts/layout.md).
+
 ## Related
 
 - [Security](security.md) · [Serving it](../integration/index.md)

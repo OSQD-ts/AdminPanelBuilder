@@ -46,7 +46,20 @@ What is there. Changes when anything is declared, moved or reconfigured; `struct
 
 A value item also carries `writable` (this listener lets the viewer change it), `approval`, `timed` and
 `span`; every item carries `size` (`{ w, h }`) when code gave one; a chart carries `stacked`, `lines` (`{ label, value? , from? }`) and `bins` when set. A group
-carries `layout`. A value item or a table column carries `dateFormat`, `image` and `qr` when declared.
+carries `layout`. Any item carries `section` (a section id), `emphasis` (`"primary"` or `"secondary"`),
+and a value `card` (a list card id), when declared. A group drawn in parts carries:
+
+```ts
+{
+  sections?: Array<{ id: string; title: string; description?: string; collapsible: boolean; collapsed?: true; density?: "compact" | "comfortable"; columns?: number }>;
+  cards?: Array<{ id: string; title: string; description?: string; layout: "list" | "grid" | "columns:2" | "columns:3"; span?; size?; emphasis? }>;
+  marks?: Array<{ id: string; kind: "divider" | "spacer" | "break"; label?: string; size?: "sm" | "md" | "lg"; section?: string; before?: string }>;
+  sectionTabs?: true; outline?: boolean; filter?: boolean; density?: "compact" | "comfortable";
+}
+```
+
+A mark's `before` is the `"type:id"` of the item it stands before in its section; absent, it is at the
+section's end. A group using none of these sends none of the fields. A value item or a table column carries `dateFormat`, `image` and `qr` when declared.
 The schema carries `time` (`{ timeZone?, dateFormat?, dateLocale? }`) when the panel sets any, `locale`, `messages` when replaced, and `stream: true` when the
 listener streams.
 

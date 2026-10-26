@@ -14,6 +14,7 @@ export type { ActionOutcome, AdminPanelEvents, AdminPanelOptions, ChangeOptions,
 export type { RepeatRule } from "./panel/recurrence.js";
 export { memorySync, redisClaim, redisSync, MAX_SYNC_MESSAGE_BYTES } from "./panel/sync.js";
 export { MAX_CARD_ROWS, MAX_GRID_COLUMNS, MAX_LAYOUT_BYTES, MAX_LAYOUT_ENTRIES } from "./panel/layout.js";
+export { MAX_LAYOUT_MARKS_PER_GROUP, MAX_LIST_CARD_VALUES, MAX_SECTIONS_PER_GROUP } from "./panel/structure.js";
 export type { ChangeMessage, PanelSync, PendingMessage, RedisPublisherLike, RedisSubscriberLike, RedisSyncOptions, ScheduleMessage, SyncMessage } from "./panel/sync.js";
 export { action, bind, chart, configure, counter, defaultPanel, feed, group, modifiable, percentiles, profile, rate, table, viewable } from "./default-panel.js";
 export { PanelFeed, MAX_FEED_CAPACITY, MAX_ENTRY_TEXT } from "./blocks/feed.js";
@@ -101,8 +102,16 @@ export type {
   ChartOptions,
   ChartSchema,
   ChartSeriesSchema,
+  Emphasis,
   GroupOptions,
   GroupSchema,
+  ItemPlacement,
+  LayoutMarkSchema,
+  ListCardOptions,
+  ListCardSchema,
+  MarkOptions,
+  SectionOptions,
+  SectionSchema,
   ItemSchema,
   JsonValue,
   ModifiableOptions,

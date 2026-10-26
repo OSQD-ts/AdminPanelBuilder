@@ -24,6 +24,7 @@
 | [How it works](concepts/how-it-works.md) | The panel, the router, the front ends, and what travels between them. |
 | [Values](concepts/values.md) | `viewable`, `modifiable`, `bind`: handles, sources, kinds and constraints. |
 | [Groups](concepts/groups.md) | Grouping at declaration and after the fact, and what a group controls. |
+| [Layout](concepts/layout.md) | Sections, list cards, dividers and emphasis: a tab of forty values that still reads. |
 | [Charts](concepts/charts.md) | Alone or shared, over time, over keys or against another value, and what a history costs. |
 | [Actions](concepts/actions.md) | Buttons that run code in the application, with deadlines, input and attribution. |
 | [Tables, feeds and profiles](concepts/blocks.md) | Rows, events, and several settings at once. |

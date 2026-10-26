@@ -1,6 +1,6 @@
 # Examples
 
-Seven runnable panels, each going deep into one part of the engine.
+Eight runnable panels, each going deep into one part of the engine.
 
 ← [Documentation](index.md)
 
@@ -21,6 +21,7 @@ code.
 | [Replicas and a fleet](#replicas-and-a-fleet) | `npx tsx examples/fleet.ts` | sync between replicas, the fleet page, a remote panel |
 | [Inside another application](#inside-another-application) | `npx tsx examples/embedding.ts` | fragments, snapshots, the Fetch API |
 | [Configured from a file](#configured-from-a-file) | `APB_CONFIG=admin-panel.toml npx tsx examples/configuration.ts` | the listener in TOML, reloaded on SIGHUP |
+| [A crowded tab, made readable](#a-crowded-tab-made-readable) | `npx tsx examples/layout.ts` | sections, list cards, dividers, emphasis, the tab's filter |
 
 ## Quickstart
 
@@ -99,3 +100,19 @@ The same panel is also served through `fetchHandler()` as Hono, Next.js and Deno
 [`examples/configuration.ts`](../examples/configuration.ts). The declarations in code, the listener in
 `admin-panel.toml` and the environment; `kill -HUP` applies what can change without a restart. See
 [configuration](operations/configuration.md).
+
+## A crowded tab, made readable
+
+[`examples/layout.ts`](../examples/layout.ts). One tab of about forty values: the readings people
+open the panel for, the rules of a match, a moderation queue, API limits and the health of every
+dependency. Declared a card each they are a wall of equal boxes (`buildLayoutPanel({ divided: false })`
+draws that); with `section`, `card` and `emphasis` added to the same declarations they are:
+
+- five sections with a heading and a line each, the last two closed until opened, and an outline of
+  them at the top of the tab;
+- the many small settings gathered into list cards, a row each, edited where they are;
+- the three numbers that matter marked `primary`;
+- a labelled divider between the game's readings and the machines';
+- a filter box over the tab.
+
+See [layout](concepts/layout.md).

@@ -4,7 +4,7 @@ import type { Counter, CounterOptions, PercentileOptions, Percentiles, RateOptio
 import type { PanelFeed } from "../blocks/feed.js";
 import type { PanelTable } from "../blocks/table.js";
 import type { AdminPanel } from "../core.js";
-import type { ActionContext, ActionOptions, BindOptions, FeedOptions, GroupOptions, ModifiableOptions, ProfileOptions, SharedChartOptions, TableOptions, ViewableOptions } from "../types.js";
+import type { ActionContext, ActionOptions, BindOptions, FeedOptions, GroupOptions, ListCardOptions, MarkOptions, ModifiableOptions, ProfileOptions, SectionOptions, SharedChartOptions, TableOptions, ViewableOptions } from "../types.js";
 import type { PanelValue } from "../values/handle.js";
 
 /**
@@ -69,6 +69,36 @@ export class PanelGroup {
   /** Several values set at once, drawn in this group whichever groups the values are in. */
   profile(label: string, settings: ReadonlyArray<readonly [PanelValue<unknown>, unknown]>, options: ProfileOptions = {}): string {
     return this.panel.profile(label, settings, { ...options, group: this.name });
+  }
+
+  /** A section of this group, with a heading over its own grid. See `panel.section()`. */
+  section(name: string, options: Omit<SectionOptions, "group"> = {}): this {
+    this.panel.section(name, { ...options, group: this.name });
+    return this;
+  }
+
+  /** A card in this group holding several values as rows. See `panel.card()`. */
+  card(name: string, options: Omit<ListCardOptions, "group"> = {}): this {
+    this.panel.card(name, { ...options, group: this.name });
+    return this;
+  }
+
+  /** A line between the cards declared before and after it. */
+  divider(options: Omit<MarkOptions, "group"> = {}): this {
+    this.panel.divider({ ...options, group: this.name });
+    return this;
+  }
+
+  /** Empty room between the cards declared before and after it. */
+  spacer(options: Omit<MarkOptions, "group"> = {}): this {
+    this.panel.spacer({ ...options, group: this.name });
+    return this;
+  }
+
+  /** Ends the row: the next card starts on a row of its own. */
+  break(options: Omit<MarkOptions, "group"> = {}): this {
+    this.panel.break({ ...options, group: this.name });
+    return this;
   }
 
   /** A chart of this group's own, drawing several values together. */

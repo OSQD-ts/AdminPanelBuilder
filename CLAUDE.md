@@ -56,8 +56,8 @@ test and typecheck: `src/client.generated.ts` is generated from `src/client/` an
 - `src/stores/` — persistence (file, memory, Redis). `src/internal/` — helpers; `clock.ts`, `emitter.ts` and `async.ts` are
   byte-identical copies from hackerpot and bothandlerjs and must stay so; `ip.ts` is bothandlerjs's, byte
   for byte (`npm run shared:check` compares all four).
-- `examples/` — seven generic panels, each going deep into one part of the engine (quickstart,
-  service, change-control, access, fleet, embedding, configuration), described in `docs/examples.md` and
+- `examples/` — eight generic panels, each going deep into one part of the engine (quickstart,
+  service, change-control, access, fleet, embedding, configuration, layout), described in `docs/examples.md` and
   run as processes by `tests/examples.test.ts`.
 - `docs/` — the documentation; README.md is the argument and the index.
 

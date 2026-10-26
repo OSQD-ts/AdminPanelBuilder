@@ -83,7 +83,15 @@ export type Status = "ok" | "warn" | "bad";
 export type StatusRule = { warn?: number | undefined; bad?: number | undefined; below?: boolean | undefined } | ((value: never) => Status | undefined);
 
 /** How many grid columns a card spans, or the whole row. */
-export type Span = 1 | 2 | 3 | "full";
+/**
+ * A width hint: 1, 2 or 3 thirds of the old four-column page, or a share of the row by name. Each
+ * becomes a width on the 12-column grid: quarter 3, third 4, half 6, two-thirds 8, three-quarters 9,
+ * full 12 (1, 2 and 3 are 3, 6 and 9).
+ */
+export type Span = 1 | 2 | 3 | "full" | "quarter" | "third" | "half" | "two-thirds" | "three-quarters";
+
+/** How much a card stands out: `primary` for the numbers people come for, `secondary` for the rest. */
+export type Emphasis = "primary" | "secondary";
 
 /**
  * A card's size in its group's grid of cells: `w` columns out of the grid's (12 unless the panel or
@@ -176,6 +184,11 @@ interface CommonOptions {
    * otherwise) and `h` rows, a minimum height. Default: chosen from what the card shows.
    */
   size?: CardSize | undefined;
+  /** The section of its group it is drawn in, under that section's heading. See `panel.section()`. */
+  section?: string | undefined;
+  /** Gathers this value with others into one card, as a list of rows. Values only. See `panel.card()`. */
+  card?: string | undefined;
+  emphasis?: Emphasis | undefined;
 }
 
 export interface ViewableOptions extends CommonOptions {
@@ -316,6 +329,58 @@ export interface GroupOptions {
   layout?: "grid" | "list" | undefined;
   /** This group's grid of cells, over the panel's. */
   grid?: Partial<GridShape> | undefined;
+  /** Its sections one under another (the default), or one at a time behind tabs of their own. */
+  sections?: "stack" | "tabs" | undefined;
+  /** A list of its sections at the top, to jump to one. Default: shown from four sections up. */
+  outline?: boolean | undefined;
+  /** A box that narrows the tab to the cards and rows whose name matches. Default: on a tab drawn in sections, list cards or marks, from 16 values up. */
+  filter?: boolean | undefined;
+  /** Spacing inside this group: tighter (`compact`) or looser than the viewer's own setting. */
+  density?: "compact" | "comfortable" | undefined;
+}
+
+/** A section of a group: a heading, a line about it, and its own grid of cards. */
+export interface SectionOptions {
+  /** The group it is in. Default: the panel's `defaultGroup`. */
+  group?: string | undefined;
+  /** What its heading says. Default: its name. */
+  title?: string | undefined;
+  description?: string | undefined;
+  /** Position within the group; lower first, ties in order of first mention. */
+  order?: number | undefined;
+  /** Closed when a viewer first sees it. Each viewer's own opening and closing is kept in their browser. */
+  collapsed?: boolean | undefined;
+  /** Whether it can be closed at all. Default true. */
+  collapsible?: boolean | undefined;
+  density?: "compact" | "comfortable" | undefined;
+  /** This section's grid columns, over its group's. */
+  columns?: number | undefined;
+}
+
+/** A card of several values, one row each: label, reading and, where it can be changed, the field. */
+export interface ListCardOptions {
+  group?: string | undefined;
+  /** The section the card is in. Every value in it is in the same one. */
+  section?: string | undefined;
+  /** What the card is called. Default: its name. It stands where its first value would. */
+  title?: string | undefined;
+  description?: string | undefined;
+  /** Rows one under another (`list`, the default), in two or three columns, or as small tiles (`grid`). */
+  layout?: "list" | "grid" | "columns:2" | "columns:3" | undefined;
+  span?: Span | undefined;
+  size?: CardSize | undefined;
+  emphasis?: Emphasis | undefined;
+}
+
+/** Where a divider, a spacer or a break goes: a group, a section, and an order among the cards. */
+export interface MarkOptions {
+  group?: string | undefined;
+  section?: string | undefined;
+  /** What a divider's line says, in its middle. */
+  label?: string | undefined;
+  /** How tall a spacer is. Default `"md"`. */
+  size?: "sm" | "md" | "lg" | undefined;
+  order?: number | undefined;
 }
 
 /** A grid of cells: how many columns at full width, and how tall a row is in CSS pixels. */
@@ -325,6 +390,8 @@ export interface GridShape {
 }
 
 export interface SharedChartOptions extends Omit<ChartOptions, "in" | "title"> {
+  section?: string | undefined;
+  emphasis?: Emphasis | undefined;
   title: string;
   /** The group it is drawn in. Default: the group of its first series. */
   group?: string | undefined;
@@ -530,7 +597,7 @@ export interface ValueConstraints {
   multiline?: boolean;
 }
 
-export interface ValueSchema {
+export interface ValueSchema extends ItemPlacement {
   type: "value";
   id: string;
   label: string;
@@ -572,7 +639,7 @@ export interface ChartSeriesSchema {
   history?: string;
 }
 
-export interface ChartSchema {
+export interface ChartSchema extends ItemPlacement {
   type: "chart";
   id: string;
   title: string;
@@ -606,7 +673,7 @@ export interface InputSchema {
   default?: JsonValue;
 }
 
-export interface ActionSchema {
+export interface ActionSchema extends ItemPlacement {
   type: "action";
   id: string;
   label: string;
@@ -626,7 +693,7 @@ export interface ActionSchema {
   reasonRequired?: boolean;
 }
 
-export interface TableSchema {
+export interface TableSchema extends ItemPlacement {
   type: "table";
   id: string;
   title: string;
@@ -640,7 +707,7 @@ export interface TableSchema {
   size?: CardSize;
 }
 
-export interface FeedSchema {
+export interface FeedSchema extends ItemPlacement {
   type: "feed";
   id: string;
   title: string;
@@ -651,7 +718,7 @@ export interface FeedSchema {
   size?: CardSize;
 }
 
-export interface ProfileSchema {
+export interface ProfileSchema extends ItemPlacement {
   type: "profile";
   id: string;
   title: string;
@@ -670,6 +737,46 @@ export interface ProfileSchema {
 
 export type ItemSchema = ValueSchema | ChartSchema | ActionSchema | TableSchema | FeedSchema | ProfileSchema;
 
+/** Where an item sits within its group, when the group is divided. Absent on a group that is not. */
+export interface ItemPlacement {
+  /** The id of the section it is in (`GroupSchema.sections`). */
+  section?: string;
+  /** The id of the list card it is a row of (`GroupSchema.cards`). */
+  card?: string;
+  emphasis?: Emphasis;
+}
+
+export interface SectionSchema {
+  id: string;
+  title: string;
+  description?: string;
+  /** Whether it can be closed; `collapsed` says it starts closed. */
+  collapsible: boolean;
+  collapsed?: boolean;
+  density?: "compact" | "comfortable";
+  columns?: number;
+}
+
+export interface ListCardSchema {
+  id: string;
+  title: string;
+  description?: string;
+  layout: "list" | "grid" | "columns:2" | "columns:3";
+  span?: Span;
+  size?: CardSize;
+  emphasis?: Emphasis;
+}
+
+/** A line, a gap, or the end of a row, before the card `before` names (`type:id`), or at the end of its section. */
+export interface LayoutMarkSchema {
+  id: string;
+  kind: "divider" | "spacer" | "break";
+  label?: string;
+  size?: "sm" | "md" | "lg";
+  section?: string;
+  before?: string;
+}
+
 export interface GroupSchema {
   id: string;
   title: string;
@@ -678,6 +785,16 @@ export interface GroupSchema {
   /** This group's grid, where it differs from the panel's. */
   grid?: GridShape;
   items: ItemSchema[];
+  /** Its sections in order, when it has any; an item with no `section` is drawn above them. */
+  sections?: SectionSchema[];
+  /** Its list cards, each drawn where its first value is. */
+  cards?: ListCardSchema[];
+  marks?: LayoutMarkSchema[];
+  /** Sections one at a time, behind tabs. */
+  sectionTabs?: boolean;
+  outline?: boolean;
+  filter?: boolean;
+  density?: "compact" | "comfortable";
 }
 
 export interface PanelSchema {

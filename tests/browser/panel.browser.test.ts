@@ -23,6 +23,8 @@ let german: AdminPanel;
 let media: AdminPanel;
 let rowsPanel: AdminPanel;
 let tablesPanel: AdminPanel;
+let layoutPanel: AdminPanel;
+let maxPlayers: { value: number };
 const accountRows = [
   { id: "a1", name: "Ada", status: "active" },
   { id: "a2", name: "Bo", status: "suspended" },
@@ -156,6 +158,30 @@ beforeAll(async () => {
     ],
   });
   const tablesHandler = tablesPanel.handler({ basePath: "/tables", auth: { check: () => "tester" }, controls: { actions: true } });
+  // A tab drawn in parts: sections, list cards, marks, a filter, and a second tab of sub-tabs.
+  layoutPanel = createAdminPanel({ title: "Layout" });
+  const serverTab = layoutPanel.group("Server", { filter: true, outline: true });
+  serverTab.section("Right now", { description: "This minute." });
+  serverTab.section("Rules", { description: "Changed at the next match." });
+  serverTab.section("Health", { collapsed: true });
+  serverTab.card("Limits", { section: "Rules", layout: "columns:2" });
+  serverTab.viewable(12, { label: "Players online", section: "Right now", emphasis: "primary" });
+  serverTab.divider({ section: "Right now", label: "Machines" });
+  serverTab.viewable(40, { label: "CPU", unit: "%", section: "Right now" });
+  serverTab.spacer({ section: "Right now", size: "lg" });
+  serverTab.viewable(55, { label: "Memory", unit: "%", section: "Right now" });
+  maxPlayers = serverTab.modifiable(10, { label: "Max players", min: 2, max: 64, card: "Limits" });
+  serverTab.modifiable(30, { label: "Queue timeout", unit: "s", min: 5, max: 120, card: "Limits" });
+  serverTab.modifiable(true, { label: "Ranked", card: "Limits" });
+  serverTab.viewable("ok", { label: "Database", section: "Health" });
+  serverTab.break({ section: "Health" });
+  serverTab.viewable("ok", { label: "Cache", section: "Health" });
+  const stages = layoutPanel.group("Stages", { sections: "tabs" });
+  for (const name of ["Alpha", "Beta", "Gamma"]) {
+    stages.section(name);
+    stages.viewable(name.length, { label: `${name} count`, section: name });
+  }
+  const layoutHandler = layoutPanel.handler({ basePath: "/layout", auth: { check: () => "tester" }, controls: { edit: true } });
   const element = (await build({ entryPoints: ["src/element/index.ts"], bundle: true, format: "esm", write: false, platform: "browser" })).outputFiles[0]?.text ?? "";
   server = createServer((request, response) => {
     const url = request.url ?? "/";
@@ -165,6 +191,7 @@ beforeAll(async () => {
     if (url.startsWith("/de")) return germanHandler(request, response);
     if (url.startsWith("/media")) return mediaHandler(request, response);
     if (url === "/tables" || url.startsWith("/tables/")) return tablesHandler(request, response);
+    if (url === "/layout" || url.startsWith("/layout/")) return layoutHandler(request, response);
     if (url === "/rows" || url.startsWith("/rows/")) {
       const headers = request.headers as Record<string, string | undefined>;
       rowsSeen.push({ method: request.method ?? "GET", url, headers: { "x-csrf-token": headers["x-csrf-token"], "x-request-token": headers["x-request-token"], "x-tenant": headers["x-tenant"], "x-host-token": headers["x-host-token"] } });
@@ -220,6 +247,7 @@ afterAll(async () => {
   media?.close();
   rowsPanel?.close();
   tablesPanel?.close();
+  layoutPanel?.close();
 });
 
 describe("the standalone page", () => {
@@ -1304,6 +1332,112 @@ describe("tables sized to what they hold, and row actions on some rows", () => {
   it("passes axe with tables sized to their rows and row actions disabled with a reason", async () => {
     const page = await open("/tables/", 1200, true);
     await expect.poll(() => page.locator(".apb-block-table tbody tr").count()).toBeGreaterThan(5);
+    expect(await axe(page)).toEqual([]);
+    await page.close();
+  });
+});
+
+describe("a tab drawn in sections, list cards and marks", () => {
+  const section = (page: Page, title: string) => page.locator("section.apb-section").filter({ has: page.getByRole("heading", { name: title, exact: true }) });
+
+  it("keeps a section closed or opened across a reload, and starts a collapsed one closed", async () => {
+    const page = await open("/layout/");
+    const now = section(page, "Right now");
+    const toggle = now.getByRole("button", { name: "Right now" });
+    await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(await section(page, "Health").getByRole("button", { name: "Health" }).getAttribute("aria-expanded")).toBe("false");
+    expect(await page.getByText("Database", { exact: true }).isVisible()).toBe(false);
+    await toggle.click();
+    expect(await now.locator(".apb-section-body").isVisible()).toBe(false);
+    await section(page, "Health").getByRole("button", { name: "Health" }).click();
+    await page.reload();
+    await expect.poll(() => section(page, "Right now").getByRole("button", { name: "Right now" }).getAttribute("aria-expanded")).toBe("false");
+    expect(await section(page, "Health").getByRole("button", { name: "Health" }).getAttribute("aria-expanded")).toBe("true");
+    // The break cuts Health into two grids.
+    expect(await section(page, "Health").locator(".apb-grid").count()).toBe(2);
+    await page.close();
+  });
+
+  it("edits a value in a list card's row, refusing one out of range with the reason", async () => {
+    const page = await open("/layout/");
+    const list = page.locator(".apb-listcard").filter({ has: page.getByRole("heading", { name: "Limits", exact: true }) });
+    await expect.poll(() => list.locator(".apb-row").count()).toBe(3);
+    const row = list.locator(".apb-row").filter({ hasText: "Max players" });
+    await row.getByRole("spinbutton").fill("999");
+    await row.getByRole("button", { name: "Apply" }).click();
+    await expect.poll(() => row.getByRole("alert").textContent()).toMatch(/64/);
+    await row.getByRole("spinbutton").fill("12");
+    await row.getByRole("button", { name: "Apply" }).click();
+    await expect.poll(() => maxPlayers.value).toBe(12);
+    await page.close();
+  });
+
+  it("draws a labelled divider, a spacer and the primary reading", async () => {
+    const page = await open("/layout/");
+    const now = section(page, "Right now");
+    await expect.poll(() => now.getByRole("separator", { name: "Machines" }).count()).toBe(1);
+    expect(await now.locator(".apb-spacer[data-size=lg]").count()).toBe(1);
+    expect(await now.locator(".apb-grid").count()).toBe(3);
+    expect(await now.locator("[data-emphasis=primary]").count()).toBe(1);
+    await page.close();
+  });
+
+  it("jumps to a section from the outline, opening it", async () => {
+    const page = await open("/layout/");
+    const outline = page.getByRole("navigation", { name: "On this tab" });
+    await outline.getByRole("button", { name: "Health" }).click();
+    await expect.poll(() => section(page, "Health").getByRole("button", { name: "Health" }).getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => page.evaluate(() => document.activeElement?.textContent ?? "")).toMatch(/Health/);
+    await page.close();
+  });
+
+  it("narrows the tab with the filter, opening what matches, and says when nothing does", async () => {
+    const page = await open("/layout/");
+    const box = page.getByRole("searchbox", { name: "Filter this tab: Server" });
+    await box.fill("cache");
+    await expect.poll(() => page.getByText("Cache", { exact: true }).isVisible()).toBe(true);
+    expect(await page.getByText("CPU", { exact: true }).isVisible()).toBe(false);
+    expect(await section(page, "Rules").isVisible()).toBe(false);
+    await box.fill("ranked");
+    await expect.poll(() => page.locator(".apb-row").filter({ hasText: "Ranked" }).isVisible()).toBe(true);
+    expect(await page.locator(".apb-row").filter({ hasText: "Max players" }).isVisible()).toBe(false);
+    await box.fill("nothing like this");
+    await expect.poll(() => page.getByText("Nothing on this tab matches.").isVisible()).toBe(true);
+    await box.fill("");
+    await expect.poll(() => page.getByText("CPU", { exact: true }).isVisible()).toBe(true);
+    await page.close();
+  });
+
+  it("shows a tab's sections as sub-tabs, moved between by click and arrow keys", async () => {
+    const page = await open("/layout/");
+    await page.getByRole("tab", { name: "Stages" }).click();
+    const strip = page.getByRole("tablist", { name: "Sections: Stages" });
+    await expect.poll(() => strip.getByRole("tab", { name: "Alpha" }).getAttribute("aria-selected")).toBe("true");
+    expect(await page.getByText("Beta count").isVisible()).toBe(false);
+    await strip.getByRole("tab", { name: "Gamma" }).click();
+    await expect.poll(() => page.getByText("Gamma count").isVisible()).toBe(true);
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => strip.getByRole("tab", { name: "Alpha" }).getAttribute("aria-selected")).toBe("true");
+    await page.keyboard.press("End");
+    await expect.poll(() => page.getByText("Gamma count").isVisible()).toBe(true);
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(() => page.getByText("Beta count").isVisible()).toBe(true);
+    await page.close();
+  });
+
+  it("fits a phone without a sideways scroll", async () => {
+    const page = await open("/layout/", 375);
+    await expect.poll(() => page.locator(".apb-listcard .apb-row").count()).toBe(3);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+    await page.close();
+  });
+
+  it("passes axe with sections, list cards, marks and sub-tabs", async () => {
+    const page = await open("/layout/", 1200, true);
+    await expect.poll(() => page.locator(".apb-listcard .apb-row").count()).toBe(3);
+    expect(await axe(page)).toEqual([]);
+    await page.getByRole("tab", { name: "Stages" }).click();
+    await expect.poll(() => page.getByText("Alpha count").isVisible()).toBe(true);
     expect(await axe(page)).toEqual([]);
     await page.close();
   });

@@ -13,9 +13,11 @@ export function checkCardSize(label: string, size: CardSize | undefined): CardSi
   return checked;
 }
 
+const SPANS: readonly unknown[] = [1, 2, 3, "full", "quarter", "third", "half", "two-thirds", "three-quarters"];
+
 export function checkSpan(label: string, span: Span | undefined): Span | undefined {
-  if (span === undefined || span === 1 || span === 2 || span === 3 || span === "full") return span;
-  throw new AdminPanelConfigError(`"${label}" spans ${JSON.stringify(span)}; a span is 1, 2, 3 or "full"`);
+  if (span === undefined || SPANS.includes(span)) return span;
+  throw new AdminPanelConfigError(`"${label}" spans ${JSON.stringify(span)}; a span is 1, 2, 3, "quarter", "third", "half", "two-thirds", "three-quarters" or "full"`);
 }
 
 export function sameJson(a: unknown, b: unknown): boolean {

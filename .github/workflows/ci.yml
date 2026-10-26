@@ -91,13 +91,15 @@ jobs:
 
       # The same budget the release enforces, so it fails in a pull request rather than
       # halfway through a publish. The page's client travels twice, as ESM and as CJS.
+      # 2.25 MB since the layout work (sections, list cards, dividers): 2,075,880 bytes with it,
+      # after 0.3.x had already spent the old 2 MB on times, pictures, QR codes and row actions.
       - name: Pack, and stay small
         run: |
           npm pack --silent
           tarball=$(ls osqd-admin-panel-builder-*.tgz)
           size=$(stat -c%s "$tarball")
           echo "$tarball: $size bytes"
-          test "$size" -lt 2000000
+          test "$size" -lt 2250000
           rm -f "$tarball"
 
       # Everything above checks what is in the package. This checks it can be loaded:

@@ -64,7 +64,8 @@ Inferred from the starting value, or set with `kind`:
 | `visibleWhen` | all | `() => boolean`: the card is hidden while it answers false, and an edit is refused |
 | `disabledWhen` | all | `() => reason or false`: shown, but not changeable, with the reason beside the controls |
 | `timeline` | all | Recent changes kept to show beside the card: default 20 for text, choices and switches, 0 for numbers (which get a chart), never for sensitive values |
-| `span` | all | Grid columns the card takes: 1, 2, 3 or `"full"`; superseded by `size` |
+| `span` | all | The width the card takes: `"quarter"`, `"third"`, `"half"`, `"two-thirds"`, `"three-quarters"`, `"full"`, or the older 1, 2, 3; `size` sets cells exactly |
+| `section`, `card`, `emphasis` | all (`card` on values only) | The section of its group it is drawn in, the list card it is a row of, and `"primary"` or `"secondary"`. See [layout](layout.md) |
 | `size` | all | Cells the card takes in its group's grid: `{ w, h }`. See [groups](groups.md) |
 | `min`, `max` | all | Range; for a viewable, only the scale of a gauge |
 | `step`, `integer` | modifiable | Accepted numbers are `min + k × step`; whole numbers only |

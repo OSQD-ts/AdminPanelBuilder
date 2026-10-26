@@ -29,6 +29,7 @@ import { clear, el, flash, uid } from "./dom.js";
 import { said } from "./explain.js";
 import type { Translate } from "./i18n.js";
 import { type Destination, installShortcuts, type Shortcuts } from "./palette.js";
+import { buildDivided, type DividedHost, isDivided } from "./divided.js";
 import { GridView, type Placed } from "./grid.js";
 import type { Prefs } from "./prefs.js";
 import { buildSettings, type Settings } from "./settings.js";
@@ -67,6 +68,8 @@ export class View implements CardHost {
   private held: Store | undefined;
   /** Each group's grid, by group id, for arranging cards on the page. */
   readonly grids = new Map<string, GridView>();
+  /** The group each grid is in, and what it is called, for a group drawn in several grids (divided.ts). */
+  private readonly gridGroups = new Map<string, { group: string; title: string }>();
   /** Where the page was scrolled when each tab was left, so going back returns there. */
   private readonly scrolled = new Map<string, number>();
   private main!: HTMLElement;
@@ -125,6 +128,7 @@ export class View implements CardHost {
     }
     this.applyPrefs();
     this.grids.clear();
+    this.gridGroups.clear();
     if (this.deps.compact) return this.buildCompact(store);
     const t = this.t;
 
@@ -198,6 +202,10 @@ export class View implements CardHost {
     for (const group of schema.groups) {
       const { tab, pane } = this.tabPair(group.id, group.title, group.items.filter((item) => !(item.type === "chart" && item.placement === "alone")).length);
       if (group.description !== undefined) pane.append(el("p", "apb-pane-description", group.description));
+      if (isDivided(group)) {
+        this.addTab({ id: group.id, tab, pane, cards: buildDivided(this.divisionHost(), pane, group) });
+        continue;
+      }
       const grid = el("div", group.layout === "list" ? "apb-grid apb-grid-list" : "apb-grid");
       const cards = this.fillGrid(grid, group.items, this.shapeOf(group.id), group.layout === "list", [this.prefs.layout?.[group.id], schema.layout?.[group.id]], group.id);
       pane.append(grid);
@@ -328,8 +336,31 @@ export class View implements CardHost {
     }
     const view = new GridView(grid, shape, list);
     view.place(placed, layouts);
-    if (groupId !== undefined) this.grids.set(groupId, view);
+    if (groupId !== undefined) {
+      this.grids.set(groupId, view);
+      this.gridGroups.set(groupId, { group: groupId, title: "" });
+    }
     return cards;
+  }
+
+  /** What divided.ts needs of the view: its cards, sizes, grids and the viewer's choices. */
+  private divisionHost(): DividedHost {
+    return {
+      t: this.t,
+      prefs: this.prefs,
+      buildCard: (item) => this.buildCard(item),
+      sizing: (item) => this.sizing(item),
+      shapeOf: (groupId) => this.shapeOf(groupId),
+      layoutsOf: (groupId) => [this.prefs.layout?.[groupId], this.current.schema.layout?.[groupId]],
+      keepGrid: (view, groupId, title) => {
+        // The first grid of a group goes under the group's id, as an undivided group's does.
+        let key = groupId;
+        for (let n = 2; this.grids.has(key); n += 1) key = `${groupId}~${n}`;
+        this.grids.set(key, view);
+        this.gridGroups.set(key, { group: groupId, title });
+      },
+      measure: (node) => this.measureGrids(node),
+    };
   }
 
   private buildCard(item: ItemSchema): Card {
@@ -445,13 +476,19 @@ export class View implements CardHost {
   resetLayout(): void {
     this.prefs.layout = undefined;
     this.prefs.save();
-    for (const [id, view] of this.grids) view.place(view.declared(), [this.current.schema.layout?.[id]]);
+    for (const [id, view] of this.grids) view.place(view.declared(), [this.current.schema.layout?.[this.gridGroups.get(id)?.group ?? id]]);
   }
 
   /** The group whose tab is open, which is the one the header's button arranges. */
-  arrangeableGroup(): { id: string; title: string } | undefined {
+  arrangeableGroup(): { id: string; title: string; grid: string } | undefined {
     const group = this.current.schema.groups.find((entry) => entry.id === this.active);
-    return group === undefined ? undefined : { id: group.id, title: group.title };
+    if (group === undefined) return undefined;
+    // A group drawn in several grids is arranged a grid at a time: the first one on the screen.
+    const own = [...this.gridGroups.entries()].filter(([key, entry]) => entry.group === group.id && this.grids.get(key)?.element.offsetParent !== null);
+    const onScreen = own.find(([key]) => (this.grids.get(key)?.element.getBoundingClientRect().bottom ?? 0) > 96) ?? own[0];
+    if (onScreen === undefined) return { id: group.id, title: group.title, grid: group.id };
+    const [key, entry] = onScreen;
+    return { id: group.id, title: own.length > 1 && entry.title !== "" && entry.title !== group.title ? `${group.title} · ${entry.title}` : group.title, grid: key };
   }
 
   mainRegion(): HTMLElement {

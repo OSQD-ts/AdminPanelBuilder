@@ -197,6 +197,33 @@ its own would show nothing; a CLI would be a client for another process's API.
 
 **The cost.** Scripting a change means an HTTP call. A small `apb get/set/run` client is on the backlog.
 
+## A tab drawn in parts, opted into by code
+
+**The decision.** A tab can be divided: sections (headings, a line each, closable), list cards (several
+values as rows of one card), dividers, spacers and breaks, and emphasis. Each is declared in code
+(`section`, `card`, `divider` …, or `section:`, `card:`, `emphasis:` on a declaration) and travels as
+optional fields of the group and its items. A divided tab is a grid per run of cards between two marks,
+each laid out in the order the cards were declared; a tab that declares none of it is the one grid it
+always was. The open or closed state of a section is kept with the viewer's collapsed cards, as a choice
+against the section's default. Arranging a divided tab arranges one of its grids, and saving merges that
+grid's order and sizes into the group's layout, leaving the rest of it alone.
+
+**Why.** The clutter was structural: one card per value, every card the same weight, gathered by kind
+rather than by meaning. Forty values made forty boxes with nothing saying which belong together or
+which matter, and a setting that is one number took the room of a chart. Sizes and saved layouts could
+not fix that, because the missing thing was headings and grouping, not geometry. Keeping declaration
+order once marks are used is what makes "a divider between these cards" mean anything; gathering by kind
+would move cards across it. Merging one grid into the saved layout keeps every layout saved before this
+valid, and keeps the layout's shape (`order`, `sizes` per group) unchanged on the wire and in stores.
+List cards are rows of the same value cards, so edits, checks, confirmations, reasons and status keep
+one implementation.
+
+**The cost.** About 18 kB more in the main client bundle, which every page loads; the sections cannot go
+in the extras bundle because a divided tab is drawn before any chart. A divided tab is not gathered by
+kind, so its author orders it. Arranging covers one grid at a time, not moving a card between sections,
+which stays a decision of the code. A configuration file cannot divide a tab, since it cannot declare
+values.
+
 ## Related
 
 - [How it works](../concepts/how-it-works.md)

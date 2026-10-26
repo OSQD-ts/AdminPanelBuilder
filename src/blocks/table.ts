@@ -27,7 +27,7 @@ export const MAX_PAGE_SIZE = 200;
 export const MAX_SEARCH_LENGTH = 200;
 const DEFAULT_TABLE_TIMEOUT_MS = 10_000;
 const COLUMN_KEYS = ["key", "label", "format", "dateFormat", "image", "qr", "unit", "decimals", "sortable", "status"];
-const TABLE_KEYS = ["id", "label", "description", "group", "order", "span", "size", "columns", "rows", "fetch", "findRow", "rowId", "pageSize", "searchable", "actions", "timeoutMs"];
+const TABLE_KEYS = ["id", "label", "description", "group", "order", "span", "size", "section", "emphasis", "columns", "rows", "fetch", "findRow", "rowId", "pageSize", "searchable", "actions", "timeoutMs"];
 
 export interface ResolvedColumn {
   key: string;

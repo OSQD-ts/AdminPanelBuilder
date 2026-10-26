@@ -49,6 +49,9 @@ checks this table against the code.
 | `MIN_ROTATE_BYTES` | 65536 | A log that rotated below this would start a new file every few changes. |
 | `MAX_GRID_COLUMNS` | 24 | Columns a group's grid may have; past 24 a cell is narrower than a word. |
 | `MAX_CARD_ROWS` | 24 | Rows one card may take; twenty-four rows is several screens. |
+| `MAX_SECTIONS_PER_GROUP` | 50 | Sections in one tab; past a few dozen, the tab is several tabs. |
+| `MAX_LIST_CARD_VALUES` | 100 | Rows in one list card; past that a card is a page, and sections or a table read better. |
+| `MAX_LAYOUT_MARKS_PER_GROUP` | 200 | Dividers, spacers and breaks in one tab: a bound on a page somebody has to read. |
 | `MAX_LAYOUT_BYTES` | 49152 | A layout saved for everybody: a thousand cards with sizes, and still one message between replicas. |
 | `MAX_LAYOUT_ENTRIES` | 5000 | Groups and cards a saved layout may name; the rest is dropped, not stored. |
 

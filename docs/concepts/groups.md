@@ -45,7 +45,8 @@ panel.table("Games", { columns, rows, size: { w: 12, h: 6 } });
 `h` is a minimum: a row grows when what a card shows needs more room, so a size never cuts anything off.
 Without a size, a card gets one from what it shows: a number 3×2, an editable value 4×3, a value with its
 chart 6×4, a table 12×5, a feed 6×5. The older `span` (1, 2, 3 or `"full"`) still works and becomes a
-width of 3, 6, 9 or 12.
+width of 3, 6, 9 or 12; `span` also names a width — `"quarter"`, `"third"`, `"half"`, `"two-thirds"`,
+`"three-quarters"`. For sections, list cards and dividers inside a tab, see [layout](layout.md).
 
 **Packed without holes.** The panel places the cards itself rather than leaving it to the browser.
 Without a layout, it gathers related cards — single numbers, settings, charts, actions, tables and feeds,
@@ -130,5 +131,6 @@ the others are withheld on the server, not hidden on the page. See [security](..
 
 ## Related
 
+- [Layout](layout.md) — sections, list cards, dividers and emphasis within a tab.
 - [Charts](charts.md) — charts shared by a group.
 - [Who sees what](../examples.md#who-sees-what) — two listeners showing different groups of one panel.
