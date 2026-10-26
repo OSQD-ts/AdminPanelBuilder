@@ -14,10 +14,12 @@ export default defineConfig({
         "src/**/types.ts",
         // The generated bundle is a string; the served page is asserted on as text.
         "src/client.generated.ts",
-        // The browser half needs a document. Its pure modules (format, geometry) are
-        // unit-tested and stay counted; the rest is measured by `npm run test:browser`.
+        // The browser half needs a document. Its pure modules (format, geometry, division, qr) are
+        // unit-tested and stay counted; the rest is measured by `npm run test:browser`. A module
+        // listed here holds DOM wiring only: what it decides belongs in a counted module beside it,
+        // as divided.ts's decisions are in division.ts and qr-view.ts's drawing is in qr.ts.
         "src/element/**",
-        "src/client/{dom,api,app,render,editors,charts,changes,boot,blocks,cards,activity,palette,announce,table,extras,registry,view-deps,when,grid,arrange,settings}.ts",
+        "src/client/{dom,api,app,render,editors,charts,changes,boot,blocks,cards,activity,palette,announce,table,extras,registry,view-deps,when,grid,arrange,settings,divided,media,qr-view}.ts",
         // Three lines that run the command line in a process; tests/cli-process.test.ts runs it there.
         "src/apb.ts",
       ],

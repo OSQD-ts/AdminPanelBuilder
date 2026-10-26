@@ -8,7 +8,7 @@
 import type { QrOptions } from "../types.js";
 import { el } from "./dom.js";
 import type { Translate } from "./i18n.js";
-import { encodeQr, type QrMatrix } from "./qr.js";
+import { encodeQr, type QrMatrix, qrPath } from "./qr.js";
 
 /** A QR code with its text and a copy button; in a table, the code alone, named for screen readers. */
 export function drawQr(text: string, options: QrOptions | undefined, t: Translate, compact = false): HTMLElement {
@@ -49,8 +49,7 @@ const SVG = "http://www.w3.org/2000/svg";
  * zone, `currentColor` on the page's surface. Labelled for screen readers by the caller.
  */
 function qrSvg(doc: Document, matrix: QrMatrix): SVGSVGElement {
-  const quiet = 4;
-  const full = matrix.size + quiet * 2;
+  const { full, d } = qrPath(matrix);
   const svg = doc.createElementNS(SVG, "svg");
   svg.setAttribute("viewBox", `0 0 ${full} ${full}`);
   svg.setAttribute("shape-rendering", "crispEdges");
@@ -60,12 +59,6 @@ function qrSvg(doc: Document, matrix: QrMatrix): SVGSVGElement {
   background.setAttribute("height", String(full));
   background.setAttribute("class", "apb-qr-light");
   const path = doc.createElementNS(SVG, "path");
-  let d = "";
-  matrix.modules.forEach((row, r) => {
-    row.forEach((dark, c) => {
-      if (dark) d += `M${c + quiet} ${r + quiet}h1v1h-1z`;
-    });
-  });
   path.setAttribute("d", d);
   path.setAttribute("class", "apb-qr-dark");
   svg.append(background, path);

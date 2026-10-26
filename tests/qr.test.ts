@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { encodeQr, penalty, qrCapacity, qrVersionFor } from "../src/client/qr.js";
+import { encodeQr, penalty, QR_QUIET_ZONE, qrCapacity, qrPath, qrVersionFor } from "../src/client/qr.js";
 import { MAX_QR_BYTES, MAX_QR_VERSION } from "../src/values/display.js";
 
 /**
@@ -68,5 +68,31 @@ describe("QR encoder", () => {
     expect(chosen).toBeDefined();
     const scores = [0, 1, 2, 3, 4, 5, 6, 7].map((mask) => penalty(encodeQr("https://example.com", "M", { mask })?.modules ?? []));
     expect(scores[chosen?.mask ?? -1]).toBe(Math.min(...scores));
+  });
+});
+
+describe("the drawing of a code", () => {
+  it("draws every dark module once, as a unit square inside a four-module quiet zone", () => {
+    const matrix = encodeQr("otpauth://totp/osqd?secret=JBSWY3DPEHPK3PXP", "M");
+    if (matrix === undefined) throw new Error("did not encode");
+    const { full, d } = qrPath(matrix);
+    expect(QR_QUIET_ZONE).toBe(4);
+    expect(full).toBe(matrix.size + 8);
+    const squares = [...d.matchAll(/M(\d+) (\d+)h1v1h-1z/g)].map((m) => [Number(m[1]), Number(m[2])] as const);
+    // Nothing else is in the path.
+    expect(squares.map(([x, y]) => `M${x} ${y}h1v1h-1z`).join("")).toBe(d);
+    const dark = matrix.modules.flat().filter(Boolean).length;
+    expect(squares).toHaveLength(dark);
+    expect(new Set(squares.map(([x, y]) => `${x},${y}`)).size).toBe(dark);
+    for (const [x, y] of squares) {
+      expect(matrix.modules[y - 4]?.[x - 4]).toBe(true);
+      expect(Math.min(x, y)).toBeGreaterThanOrEqual(4);
+      expect(Math.max(x, y)).toBeLessThan(full - 4);
+    }
+  });
+
+  it("takes a different margin when asked, and draws nothing for an all-light matrix", () => {
+    const empty = { size: 21, modules: Array.from({ length: 21 }, () => Array.from({ length: 21 }, () => false)) } as Parameters<typeof qrPath>[0];
+    expect(qrPath(empty, 2)).toEqual({ full: 25, d: "" });
   });
 });

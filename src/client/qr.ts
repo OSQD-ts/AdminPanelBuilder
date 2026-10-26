@@ -319,3 +319,20 @@ export function penalty(modules: readonly (readonly boolean[])[]): number {
   score += Math.floor(Math.abs((dark * 100) / (size * size) - 50) / 5) * 10;
   return score;
 }
+
+/** Modules of light margin a reader needs around the code (ISO/IEC 18004: four). */
+export const QR_QUIET_ZONE = 4;
+
+/**
+ * The matrix as one SVG path of unit squares, offset by the quiet zone, and the side of the square
+ * the drawing needs (the code plus the margin on both sides). `qr-view.ts` draws it.
+ */
+export function qrPath(matrix: QrMatrix, quiet = QR_QUIET_ZONE): { full: number; d: string } {
+  let d = "";
+  matrix.modules.forEach((row, r) => {
+    row.forEach((dark, c) => {
+      if (dark) d += `M${c + quiet} ${r + quiet}h1v1h-1z`;
+    });
+  });
+  return { full: matrix.size + quiet * 2, d };
+}
